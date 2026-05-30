@@ -1,0 +1,36 @@
+version: 2
+
+models:
+  - name: stg_orders
+    description: "Staging view of orders. One row per order."
+    columns:
+      - name: order_id
+        description: "Unique order identifier"
+        tests: [unique, not_null]
+      - name: customer_id
+        description: "Foreign key to customer"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('scd_customers')  -- stg_orders 里每个 customer_id 必须在 scd_customers 里存在
+              field: customer_id
+
+  - name: stg_order_items
+    description: "Staging view of order items."
+    columns:
+      - name: order_item_id
+        tests: [unique, not_null]
+      - name: order_id
+        tests: [not_null]
+
+  - name: stg_products
+    description: "Staging view of products."
+    columns:
+      - name: product_id
+        tests: [unique, not_null]
+
+  - name: stg_customers
+    description: "Staging view of customers."
+    columns:
+      - name: customer_id
+        tests: [unique, not_null]

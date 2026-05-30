@@ -1,0 +1,2 @@
+customer_id,first_name,last_name,email,country,created_at
+cust_001,Alice,Johnson,aliceUpdated.j@email.com,US,2024-01-15 10:00:00
