@@ -1,11 +1,10 @@
 {{
     config(
         materialized='incremental',
-        unique_key='order_id',
-        merge_update_columns=['status', 'revenue1', 'number_of_lines', 'total_units', 'customer_country']
+        unique_key='order_key',
+        merge_update_columns=['status', 'line_items', 'total_quantity', 'line_total_amount', 'country']  
     )
 }}
-
 -- Fact: one row per order (incremental)
 with
     orders_enriched as (
@@ -23,7 +22,7 @@ with
             customer_id,
             order_date,
             status,
-            total_amount as revenue1,
+            total_amount,
             first_name,
             last_name,
             email,

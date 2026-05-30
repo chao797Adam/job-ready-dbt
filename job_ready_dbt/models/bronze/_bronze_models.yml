@@ -12,7 +12,7 @@ models:
         tests:
           - not_null
           - relationships:
-              to: ref('scd_customers')  -- stg_orders 里每个 customer_id 必须在 scd_customers 里存在
+              to: ref('scd_customers')  
               field: customer_id
 
   - name: stg_order_items
