@@ -107,12 +107,31 @@ If either order's status later changes to `delivered` in the source system, `fct
 
 **Status:** not yet fixed in this project. Planned remediation is to add `created_at` / `updated_at` audit columns to `raw_orders` and repoint the incremental filter at `updated_at`, documented in a follow-up change.
 
+### ⚠️ Known Issue: No Defensive Deduplication Before Merge
+
+```
+unique_key='order_key' is a MATCH key for merge, not a dedup guarantee.
+dbt does not dedupe the incoming batch — it assumes upstream already
+returns 1 row per key. Nothing enforces that, and no `unique` test
+exists on order_key / order_item_key in the gold layer.
+
+Risk: if scd_customers ever returns >1 "current" row per customer_id
+(snapshot anomaly), the join fans out → duplicate order_id → duplicate
+rows silently inserted into fct_orders (Delta MERGE only blocks
+multiple SOURCE rows hitting the same EXISTING target row — it won't
+stop duplicates within a fresh insert).
+
+Fix (not yet done): add `unique` tests on both surrogate keys, and
+consider a qualify row_number() dedup step as a backstop.
+```
+
 ## 🛡️ Engineering Best Practices & Trade-offs
 
 - **Anti-Fan-Out Pre-Aggregation:** In `int_orders_enriched`, item metrics are rolled up via `GROUP BY order_id` before joining to orders. Direct joining of 1-to-many child rows to parent headers without pre-aggregation causes metric multiplication/fan-out.
 - **Surrogate Key Determinism:** Utilizing `dbt_utils.generate_surrogate_key()` ensures cross-run consistency for surrogate primary/foreign keys.
 - **SCD Join Boundary:** Current-state customer attributes are bound via `dbt_valid_to is null` (As-Is representation). Point-in-time (As-Was) financial attribution would require valid-range temporal window joins.
 - **Watermark Limitations:** see [Known Issue](#%EF%B8%8F-known-issue-order_date-cannot-serve-as-a-change-detection-watermark) above — `order_date` watermarking misses *any* status change on an order created before the current max date, not just same-day late arrivals. This is more severe than a simple lookback-window gap and requires a true `updated_at` column to fix correctly.
+- **No Defensive Dedup on Merge:** see [Known Issue](#%EF%B8%8F-known-issue-no-defensive-deduplication-before-merge) above — the incremental merge trusts upstream models to produce unique keys but never verifies it, and no gold-layer `unique` test exists to catch a violation.
 
 ## 🚀 Quickstart
 
@@ -143,16 +162,16 @@ job_ready_dbt:
       type: databricks
       catalog: job_ready_dbt
       schema: default
-      host: 
-      http_path: 
+      host: dbc-57621226-49cb.cloud.databricks.com
+      http_path: /sql/1.0/warehouses/5e1b6a0948504b07
       threads: 4
       token: "Your_TOKEN"
     prod:
       type: databricks
       catalog: job_ready_dbt_prod
       schema: default
-      host: 
-      http_path: 
+      host: dbc-57621226-49cb.cloud.databricks.com
+      http_path: /sql/1.0/warehouses/5e1b6a0948504b07
       threads: 4
       token: "Your_TOKEN"
 ```
