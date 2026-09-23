@@ -131,6 +131,41 @@ dbt docs generate
 dbt docs serve
 ```
 
+## 🚢 Deployment
+
+This project targets **Databricks** and runs against two environments defined as separate targets in `profiles.yml`:
+
+```yaml
+job_ready_dbt:
+  target: dev
+  outputs:
+    dev:
+      type: databricks
+      catalog: job_ready_dbt
+      schema: default
+      host: 
+      http_path: 
+      threads: 4
+      token: "Your_TOKEN"
+    prod:
+      type: databricks
+      catalog: job_ready_dbt_prod
+      schema: default
+      host: 
+      http_path: 
+      threads: 4
+      token: "Your_TOKEN"
+```
+
+> ⚠️ **Do not commit your real token.** Replace `"Your_TOKEN"` with your own Databricks personal access token (User Settings → Developer → Access tokens) locally, but never push the real value to git — keep this file out of version control (e.g. via `.gitignore`) or reset `token` back to `"Your_TOKEN"` before committing.
+
+**Run against a specific environment:**
+
+```bash
+dbt build --target dev    # seed + run + test against the dev catalog
+dbt build --target prod   # same, against the prod catalog
+```
+
 ## Reference
 
 - [Tutorial video](https://www.youtube.com/watch?v=tRwIDJvKSEY&t=1425s)
