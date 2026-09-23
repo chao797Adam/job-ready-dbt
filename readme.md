@@ -73,7 +73,7 @@ job_ready_dbt/
 
 **Models:**
 
-- `dim_products`: Dimension table enriched with deterministic surrogate keys (`product_key`).
+- `dim_products`: Dimension table enriched with deterministic surrogate keys (`product_key`). **Full refresh** (not incremental) — the whole table is rebuilt from `stg_products` on every run; there's no `updated_at`-based change detection here because there's no merge logic to feed.
 - `fct_order_items`: Incremental fact table tracking line-item transactional performance.
 - `fct_orders`: Incremental fact table tracking order-level metrics, enriched customer profiles, and aggregate revenue.
 
@@ -162,16 +162,16 @@ job_ready_dbt:
       type: databricks
       catalog: job_ready_dbt
       schema: default
-      host: dbc-57621226-49cb.cloud.databricks.com
-      http_path: /sql/1.0/warehouses/5e1b6a0948504b07
+      host: 
+      http_path: 
       threads: 4
       token: "Your_TOKEN"
     prod:
       type: databricks
       catalog: job_ready_dbt_prod
       schema: default
-      host: dbc-57621226-49cb.cloud.databricks.com
-      http_path: /sql/1.0/warehouses/5e1b6a0948504b07
+      host: 
+      http_path: 
       threads: 4
       token: "Your_TOKEN"
 ```
