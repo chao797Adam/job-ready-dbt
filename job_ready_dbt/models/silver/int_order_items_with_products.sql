@@ -10,9 +10,13 @@ with
             oi.quantity,
             oi.unit_price,
             oi.quantity * oi.unit_price as line_total,
+            oi.created_at,
+            oi.updated_at,
+
             p.product_name,
             p.category,
             p.price as product_price,
+
             o.customer_id,
             o.order_date,
             o.status,

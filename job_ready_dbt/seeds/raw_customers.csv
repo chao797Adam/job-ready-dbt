@@ -1,5 +1,5 @@
 customer_id,first_name,last_name,email,country,created_at
-cust_001,Alice,Johnson,alice.j@email.com,US,2024-01-15 10:00:00
+cust_001,Alice,Johnson,alice.updated@email.com,US,2026-01-15 10:00:00
 cust_002,Bob,Smith,bob.smith@email.com,UK,2024-02-01 14:30:00
 cust_003,Carol,Williams,carol.w@email.com,US,2024-02-10 09:15:00
 cust_004,David,Brown,david.b@email.com,CA,2024-03-01 11:00:00

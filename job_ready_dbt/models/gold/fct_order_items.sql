@@ -2,7 +2,7 @@
     config(
         materialized='incremental',
         unique_key=['order_item_key'],
-        merge_update_columns=['quantity', 'unit_price', 'line_total']
+        merge_update_columns=['quantity', 'unit_price', 'line_total', 'updated_at']
     )
 }}
 
@@ -12,7 +12,7 @@ with
         select *
         from {{ ref('int_order_items_with_products') }}
         {% if is_incremental() %}
-            where order_date > (select max(order_date) from {{ this }})
+            where updated_at > (select max(updated_at) from {{ this }})
         {% endif %}
     ),
 
@@ -27,6 +27,8 @@ with
             quantity,
             unit_price,
             line_total,
+            created_at,
+            updated_at,
             product_name,
             category,
             product_price,

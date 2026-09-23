@@ -2,7 +2,7 @@
     config(
         materialized='incremental',
         unique_key='order_key',
-        merge_update_columns=['status', 'line_items', 'total_quantity', 'line_total_amount', 'country']  
+        merge_update_columns=['status', 'line_items', 'total_quantity', 'line_total_amount', 'country', 'updated_at']
     )
 }}
 -- Fact: one row per order (incremental)
@@ -11,7 +11,7 @@ with
         select *
         from {{ ref('int_orders_enriched') }}
         {% if is_incremental() %}
-            where order_date > (select max(order_date) from {{ this }})
+            where updated_at > (select max(updated_at) from {{ this }})
         {% endif %}
     ),
 
@@ -23,6 +23,8 @@ with
             order_date,
             status,
             total_amount,
+            created_at,
+            updated_at,
             first_name,
             last_name,
             email,

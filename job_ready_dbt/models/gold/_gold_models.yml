@@ -1,0 +1,17 @@
+version: 2
+
+models:
+  - name: fct_orders
+    columns:
+      - name: order_key
+        tests: [unique, not_null]
+
+  - name: fct_order_items
+    columns:
+      - name: order_item_key
+        tests: [unique, not_null]
+
+  - name: dim_products
+    columns:
+      - name: product_key
+        tests: [unique, not_null]

@@ -79,59 +79,82 @@ job_ready_dbt/
 
 ## ⚡ Incremental Strategy & Watermarking
 
-Both fact models (`fct_orders`, `fct_order_items`) use incremental materialization with `merge` strategy:
+Both fact models (`fct_orders`, `fct_order_items`) use incremental materialization with `merge` strategy, filtering on `updated_at`:
 
 ```sql
 {% if is_incremental() %}
-    where order_date > (select max(order_date) from {{ this }})
+    where updated_at > (select max(updated_at) from {{ this }})
 {% endif %}
 ```
 
 - **Unique Keys:** `order_key` (`fct_orders`), `order_item_key` (`fct_order_items`).
 - **Merge Update Governance:** Explicitly targets mutating attributes (`merge_update_columns`) to prevent historical data corruption while allowing operational state transitions (status, revenue recalibrations).
 
-### ⚠️ Known Issue: `order_date` Cannot Serve as a Change-Detection Watermark
+### ✅ Resolved: `order_date` Could Not Serve as a Change-Detection Watermark
 
-The current watermark filters on `order_date`, which is the date the order was **first created** and never changes afterward. `merge_update_columns` is configured under the assumption that mutable attributes (like `status`) will be re-selected and merged whenever they change. **These two things are incompatible**: `order_date` can only tell dbt "this is a new order," never "this existing order was updated." As a result, `merge_update_columns` silently fails to do its job for any order whose `order_date` falls before the current max — no matter how recently its `status` actually changed.
+**The problem (as originally shipped):** the watermark filtered on `order_date`, which is the date the order was **first created** and never changes afterward. `merge_update_columns` was configured under the assumption that mutable attributes (like `status`) would be re-selected and merged whenever they changed. **These two things were incompatible**: `order_date` can only tell dbt "this is a new order," never "this existing order was updated." `merge_update_columns` silently failed to do its job for any order whose `order_date` fell before the current max — no matter how recently its `status` actually changed.
 
-**Concrete example from the seed data** (`raw_orders.csv`, max `order_date` = `2024-07-15`):
+**Concrete example that exposed the bug** (`raw_orders.csv`, max `order_date` = `2024-07-15`):
 
-| order_id | order_date | status | Re-selected on next incremental run? |
-| --- | --- | --- | --- |
-| `ord_018` | 2024-07-12 | `shipped` | ❌ No — `2024-07-12 < 2024-07-15`, filtered out forever |
-| `ord_019` | 2024-07-14 | `processing` | ❌ No — same issue |
+| order_id | order_date | status | Re-selected under old `order_date` watermark? | Re-selected under new `updated_at` watermark? |
+| --- | --- | --- | --- | --- |
+| `ord_018` | 2024-07-12 | `shipped` | ❌ No — `2024-07-12 < 2024-07-15`, filtered out forever | ✅ Yes — `updated_at` (2024-07-20) is newer than any previously loaded `updated_at` |
+| `ord_019` | 2024-07-14 | `processing` | ❌ No — same issue | ✅ Yes — `updated_at` (2024-07-22) is newer |
 
-If either order's status later changes to `delivered` in the source system, `fct_orders` will never learn about it. The table will silently drift out of sync with the true order state, with no error raised.
+**Why `order_date` fails but `updated_at` works:** `order_date` is written once at creation and frozen forever — it answers "is this a new order?", not "was this row touched?". `updated_at` is (by design) re-stamped every time a row changes, regardless of how old the row's `order_date` is, so it correctly answers the question the watermark actually needs answered.
 
-**Root cause:** the seed data has no column that records "when this row was last modified" — only `order_date` (when it was created). Without a true `updated_at` (or equivalent audit) column, incremental change-detection cannot be correctly implemented no matter how the `where` clause is written; this is a data-model gap, not a SQL bug.
+**Fix applied:** added `created_at` / `updated_at` audit columns to `raw_orders` and `raw_order_items`, threaded them through `stg_orders` → `int_orders_enriched` → `fct_orders` (and the equivalent `order_items` chain), and repointed both incremental filters at `updated_at`. `updated_at` was also added to `merge_update_columns` on both fact models so the row's own audit timestamp gets refreshed on every merge. Verified via `dbt run --full-refresh` after the schema change (required — see note below).
 
-**Status:** not yet fixed in this project. Planned remediation is to add `created_at` / `updated_at` audit columns to `raw_orders` and repoint the incremental filter at `updated_at`, documented in a follow-up change.
+> **Note on rolling out this kind of fix:** `fct_orders`/`fct_order_items` are `incremental` models. Once a table already exists, `dbt run` on an incremental model does a `MERGE` against the existing structure — it does **not** re-run `CREATE TABLE AS SELECT`, so newly added columns like `updated_at` won't appear on their own. Adding columns to an incremental model's output requires `dbt run --full-refresh` (or `--full-refresh --select +fct_orders +fct_order_items` to scope it) to force a full rebuild. `view`/`table` models (staging, intermediate, `dim_products`) don't have this problem — they're dropped and recreated from scratch on every run regardless.
 
-### ⚠️ Known Issue: No Defensive Deduplication Before Merge
+### ✅ Resolved: No Defensive Deduplication Before Merge (test coverage added)
 
 ```
 unique_key='order_key' is a MATCH key for merge, not a dedup guarantee.
 dbt does not dedupe the incoming batch — it assumes upstream already
-returns 1 row per key. Nothing enforces that, and no `unique` test
-exists on order_key / order_item_key in the gold layer.
+returns 1 row per key.
 
 Risk: if scd_customers ever returns >1 "current" row per customer_id
 (snapshot anomaly), the join fans out → duplicate order_id → duplicate
 rows silently inserted into fct_orders (Delta MERGE only blocks
 multiple SOURCE rows hitting the same EXISTING target row — it won't
 stop duplicates within a fresh insert).
-
-Fix (not yet done): add `unique` tests on both surrogate keys, and
-consider a qualify row_number() dedup step as a backstop.
 ```
+
+**Fix applied:** added `unique` + `not_null` tests on the gold-layer surrogate keys:
+
+```yaml
+# models/gold/_gold_models.yml
+version: 2
+
+models:
+  - name: fct_orders
+    columns:
+      - name: order_key
+        tests: [unique, not_null]
+
+  - name: fct_order_items
+    columns:
+      - name: order_item_key
+        tests: [unique, not_null]
+
+  - name: dim_products
+    columns:
+      - name: product_key
+        tests: [unique, not_null]
+```
+
+Verified via `dbt test`: all 6 new tests pass (`unique_fct_orders_order_key`, `unique_fct_order_items_order_item_key`, `unique_dim_products_product_key`, plus their `not_null` counterparts), bringing total project test count from 11 to 17 — `PASS=17 WARN=0 ERROR=0`.
+
+**Remaining gap (not addressed):** this catches a violation after the fact in CI/testing, it does not *prevent* one. A `qualify row_number() over (partition by order_id order by ...) = 1` dedup step in `fct_orders`/`fct_order_items` would close that gap but has not been added.
 
 ## 🛡️ Engineering Best Practices & Trade-offs
 
 - **Anti-Fan-Out Pre-Aggregation:** In `int_orders_enriched`, item metrics are rolled up via `GROUP BY order_id` before joining to orders. Direct joining of 1-to-many child rows to parent headers without pre-aggregation causes metric multiplication/fan-out.
 - **Surrogate Key Determinism:** Utilizing `dbt_utils.generate_surrogate_key()` ensures cross-run consistency for surrogate primary/foreign keys.
 - **SCD Join Boundary:** Current-state customer attributes are bound via `dbt_valid_to is null` (As-Is representation). Point-in-time (As-Was) financial attribution would require valid-range temporal window joins.
-- **Watermark Limitations:** see [Known Issue](#%EF%B8%8F-known-issue-order_date-cannot-serve-as-a-change-detection-watermark) above — `order_date` watermarking misses *any* status change on an order created before the current max date, not just same-day late arrivals. This is more severe than a simple lookback-window gap and requires a true `updated_at` column to fix correctly.
-- **No Defensive Dedup on Merge:** see [Known Issue](#%EF%B8%8F-known-issue-no-defensive-deduplication-before-merge) above — the incremental merge trusts upstream models to produce unique keys but never verifies it, and no gold-layer `unique` test exists to catch a violation.
+- **Watermark Limitations:** see [Resolved issue](#-resolved-order_date-could-not-serve-as-a-change-detection-watermark) above — `order_date` watermarking missed *any* status change on an order created before the current max date, not just same-day late arrivals. Fixed by switching to an `updated_at` watermark.
+- **Dedup Test Coverage:** see [Resolved issue](#-resolved-no-defensive-deduplication-before-merge-test-coverage-added) above — `unique`/`not_null` tests now guard the gold-layer surrogate keys; a `qualify row_number()` backstop in the model SQL itself is still open.
 
 ## 🚀 Quickstart
 
@@ -162,16 +185,16 @@ job_ready_dbt:
       type: databricks
       catalog: job_ready_dbt
       schema: default
-      host: 
-      http_path: 
+      host: <your-workspace>.cloud.databricks.com
+      http_path: /sql/1.0/warehouses/<your-warehouse-id>
       threads: 4
       token: "Your_TOKEN"
     prod:
       type: databricks
       catalog: job_ready_dbt_prod
       schema: default
-      host: 
-      http_path: 
+      host: <your-workspace>.cloud.databricks.com
+      http_path: /sql/1.0/warehouses/<your-warehouse-id>
       threads: 4
       token: "Your_TOKEN"
 ```

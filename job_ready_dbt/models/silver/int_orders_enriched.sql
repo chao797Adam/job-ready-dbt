@@ -17,6 +17,9 @@ with
             o.order_date,
             o.status,
             o.total_amount,
+            o.created_at,
+            o.updated_at,
+
             c.first_name,
             c.last_name,
             c.email,
