@@ -50,6 +50,7 @@ job_ready_dbt/
 **Purpose:** Clean raw seed/source data, standardize text fields (`trim()`, `lower()`, `upper()`), enforce strict casting (`DATE`), and declare schema tests (`unique`, `not_null`, `relationships`).
 
 **Models:**
+
 - `stg_customers`: Cleans string attributes and email formatting.
 - `stg_orders`: Casts `order_date` to `DATE`.
 - `stg_order_items`: Pure structural passthrough with clean schema.
@@ -60,6 +61,7 @@ job_ready_dbt/
 **Purpose:** Encapsulate complex business logic, pre-aggregate one-to-many relationships before joining to header tables to prevent metric inflation (fan-out trap), and bind active Slowly Changing Dimensions (SCD).
 
 **Models:**
+
 - `int_order_items_with_products`: Joins order items with product catalogs and order metadata, computing line-item totals (`quantity * unit_price`).
 - `int_orders_enriched`: Pre-aggregates `stg_order_items` (`line_items`, `total_quantity`, `total_revenue` grouped by `order_id`) prior to joining with `stg_orders` and active SCD customer records (`scd_customers` where `dbt_valid_to is null`).
 
@@ -68,6 +70,7 @@ job_ready_dbt/
 **Purpose:** Analytics-ready fact and dimension models optimized for BI tool consumption (Tableau, Looker, Power BI).
 
 **Models:**
+
 - `dim_products`: Dimension table enriched with deterministic surrogate keys (`product_key`).
 - `fct_order_items`: Incremental fact table tracking line-item transactional performance.
 - `fct_orders`: Incremental fact table tracking order-level metrics, enriched customer profiles, and aggregate revenue.
@@ -85,12 +88,29 @@ Both fact models (`fct_orders`, `fct_order_items`) use incremental materializati
 - **Unique Keys:** `order_key` (`fct_orders`), `order_item_key` (`fct_order_items`).
 - **Merge Update Governance:** Explicitly targets mutating attributes (`merge_update_columns`) to prevent historical data corruption while allowing operational state transitions (status, revenue recalibrations).
 
+### ⚠️ Known Issue: `order_date` Cannot Serve as a Change-Detection Watermark
+
+The current watermark filters on `order_date`, which is the date the order was **first created** and never changes afterward. `merge_update_columns` is configured under the assumption that mutable attributes (like `status`) will be re-selected and merged whenever they change. **These two things are incompatible**: `order_date` can only tell dbt "this is a new order," never "this existing order was updated." As a result, `merge_update_columns` silently fails to do its job for any order whose `order_date` falls before the current max — no matter how recently its `status` actually changed.
+
+**Concrete example from the seed data** (`raw_orders.csv`, max `order_date` = `2024-07-15`):
+
+| order_id | order_date | status | Re-selected on next incremental run? |
+| --- | --- | --- | --- |
+| `ord_018` | 2024-07-12 | `shipped` | ❌ No — `2024-07-12 < 2024-07-15`, filtered out forever |
+| `ord_019` | 2024-07-14 | `processing` | ❌ No — same issue |
+
+If either order's status later changes to `delivered` in the source system, `fct_orders` will never learn about it. The table will silently drift out of sync with the true order state, with no error raised.
+
+**Root cause:** the seed data has no column that records "when this row was last modified" — only `order_date` (when it was created). Without a true `updated_at` (or equivalent audit) column, incremental change-detection cannot be correctly implemented no matter how the `where` clause is written; this is a data-model gap, not a SQL bug.
+
+**Status:** not yet fixed in this project. Planned remediation is to add `created_at` / `updated_at` audit columns to `raw_orders` and repoint the incremental filter at `updated_at`, documented in a follow-up change.
+
 ## 🛡️ Engineering Best Practices & Trade-offs
 
 - **Anti-Fan-Out Pre-Aggregation:** In `int_orders_enriched`, item metrics are rolled up via `GROUP BY order_id` before joining to orders. Direct joining of 1-to-many child rows to parent headers without pre-aggregation causes metric multiplication/fan-out.
 - **Surrogate Key Determinism:** Utilizing `dbt_utils.generate_surrogate_key()` ensures cross-run consistency for surrogate primary/foreign keys.
 - **SCD Join Boundary:** Current-state customer attributes are bound via `dbt_valid_to is null` (As-Is representation). Point-in-time (As-Was) financial attribution would require valid-range temporal window joins.
-- **Watermark Limitations:** Pure `> max(date)` watermarking can miss same-day late-arriving batches if timestamp granularity is sub-daily; production hardening requires lookback windows or updated-at micro-batching.
+- **Watermark Limitations:** see [Known Issue](#%EF%B8%8F-known-issue-order_date-cannot-serve-as-a-change-detection-watermark) above — `order_date` watermarking misses *any* status change on an order created before the current max date, not just same-day late arrivals. This is more severe than a simple lookback-window gap and requires a true `updated_at` column to fix correctly.
 
 ## 🚀 Quickstart
 
@@ -109,7 +129,6 @@ dbt docs generate
 dbt docs serve
 ```
 
+## Reference
 
-### Resources:
-- Learn more about dbt [in the docs](https://docs.getdbt.com/docs/introduction)
-- ref (https://www.youtube.com/watch?v=tRwIDJvKSEY&t=1425s)
+- [Tutorial video](https://www.youtube.com/watch?v=tRwIDJvKSEY&t=1425s)
