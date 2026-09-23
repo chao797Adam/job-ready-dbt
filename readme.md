@@ -65,6 +65,8 @@ job_ready_dbt/
 - `int_order_items_with_products`: Joins order items with product catalogs and order metadata, computing line-item totals (`quantity * unit_price`).
 - `int_orders_enriched`: Pre-aggregates `stg_order_items` (`line_items`, `total_quantity`, `total_revenue` grouped by `order_id`) prior to joining with `stg_orders` and active SCD customer records (`scd_customers` where `dbt_valid_to is null`).
 
+**Why two intermediate models at two different grains:** the business questions this project needs to answer fall into two distinct grains. Questions about *orders as a whole* — revenue per order, average order value, orders per week — need **one row per order** (order grain), which is why `int_orders_enriched` deliberately collapses item-level rows into per-order summary metrics before joining to the order header. Questions about *what was sold* — revenue by product/category, units sold per product — need **one row per order line** (line grain), which is why `int_order_items_with_products` intentionally does *not* aggregate and instead keeps every line item, carrying `product_id` through so it can still be sliced by product. This is a deliberate grain decision, not redundant modeling: it's what produces the two separate fact tables (`fct_orders`, `fct_order_items`) in the marts layer below, each serving the question set that matches its grain.
+
 ### 3. Marts Layer (`models/gold/`)
 
 **Purpose:** Analytics-ready fact and dimension models optimized for BI tool consumption (Tableau, Looker, Power BI).
