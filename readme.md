@@ -146,7 +146,49 @@ models:
 
 Verified via `dbt test`: all 6 new tests pass (`unique_fct_orders_order_key`, `unique_fct_order_items_order_item_key`, `unique_dim_products_product_key`, plus their `not_null` counterparts), bringing total project test count from 11 to 17 — `PASS=17 WARN=0 ERROR=0`.
 
-**Remaining gap (not addressed):** this catches a violation after the fact in CI/testing, it does not *prevent* one. A `qualify row_number() over (partition by order_id order by ...) = 1` dedup step in `fct_orders`/`fct_order_items` would close that gap but has not been added.
+**Fix applied — dedup backstop added:** both fact models now include a `qualify row_number() = 1` step after their `final` CTE's `from`, so a fan-out can no longer produce duplicate rows in the first place (not just get caught by a test afterward):
+
+```sql
+-- fct_orders.sql
+    final as (
+        select ...
+        from orders_enriched
+        qualify row_number() over (partition by order_id order by updated_at desc) = 1
+    )
+
+-- fct_order_items.sql
+    final as (
+        select ...
+        from order_items
+        qualify row_number() over (partition by order_id, product_id order by updated_at desc) = 1
+    )
+```
+
+**Why `qualify`:** equivalent to writing an extra CTE, just without the extra CTE.
+
+```sql
+-- Without qualify (2 CTEs needed):
+final as (
+    select ..., row_number() over (partition by order_id order by updated_at desc) as rn
+    from orders_enriched
+),
+deduped as (
+    select * except(rn) from final where rn = 1
+)
+
+-- With qualify (1 CTE):
+final as (
+    select ...
+    from orders_enriched
+    qualify row_number() over (partition by order_id order by updated_at desc) = 1
+)
+```
+
+`qualify` must come after `from` (like `having` comes after `group by`) — it filters on the window function's result, which only exists after `from` has been evaluated.
+
+**Note on partition keys:** `fct_order_items` partitions by `order_id, product_id` (not `order_item_id`), because that's what `order_item_key`'s surrogate key is actually generated from — deduping on the wrong grain would let two `order_item_id`s that hash to the same `order_item_key` slip through.
+
+Verified via `dbt run --select fct_orders fct_order_items` (no `--full-refresh` needed — this only adds a filter, no schema change): both models built successfully, `PASS=2 WARN=0 ERROR=0`.
 
 ## 🛡️ Engineering Best Practices & Trade-offs
 
@@ -154,7 +196,7 @@ Verified via `dbt test`: all 6 new tests pass (`unique_fct_orders_order_key`, `u
 - **Surrogate Key Determinism:** Utilizing `dbt_utils.generate_surrogate_key()` ensures cross-run consistency for surrogate primary/foreign keys.
 - **SCD Join Boundary:** Current-state customer attributes are bound via `dbt_valid_to is null` (As-Is representation). Point-in-time (As-Was) financial attribution would require valid-range temporal window joins.
 - **Watermark Limitations:** see [Resolved issue](#-resolved-order_date-could-not-serve-as-a-change-detection-watermark) above — `order_date` watermarking missed *any* status change on an order created before the current max date, not just same-day late arrivals. Fixed by switching to an `updated_at` watermark.
-- **Dedup Test Coverage:** see [Resolved issue](#-resolved-no-defensive-deduplication-before-merge-test-coverage-added) above — `unique`/`not_null` tests now guard the gold-layer surrogate keys; a `qualify row_number()` backstop in the model SQL itself is still open.
+- **Dedup Test Coverage:** see [Resolved issue](#-resolved-no-defensive-deduplication-before-merge-test-coverage-added) above — `unique`/`not_null` tests guard the gold-layer surrogate keys, and a `qualify row_number()` backstop in the model SQL now prevents fan-out duplicates from being written in the first place.
 
 ## 🚀 Quickstart
 

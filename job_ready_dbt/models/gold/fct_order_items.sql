@@ -37,6 +37,11 @@ with
             status,
             order_total_amount
         from order_items
+        qualify
+            row_number() over (
+                partition by order_id, product_id order by updated_at desc
+            )
+            = 1
     )
 
 select *

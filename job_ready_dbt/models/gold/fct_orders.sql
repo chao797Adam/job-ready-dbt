@@ -34,6 +34,7 @@ with
             total_quantity,
             line_total_amount
         from orders_enriched
+        qualify row_number() over (partition by order_id order by updated_at desc) = 1
     )
 
 select *
