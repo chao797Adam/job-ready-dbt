@@ -233,6 +233,7 @@ from {{ ref('fct_order_items') }}
 group by product_id, product_name
 order by total_revenue desc
 limit 10;
+```
 
 ## 🛡️ Engineering Best Practices & Trade-offs
 
