@@ -5,13 +5,20 @@ An industry-standard, analytics-engineering-grade dbt modeling project for an e-
 ## 📐 Architecture & Lineage
 
 ```
-raw_* (Seeds / Sources)
-  └── stg_* (Staging: Type casting, text cleaning, standardization)
-        ├── int_order_items_with_products (Line-item level enrichment)
-        └── int_orders_enriched (Order header + SCD current customer + pre-aggregated item metrics)
-              ├── dim_products (Product Dimension - Type 1)
-              ├── fct_order_items (Incremental Fact - Line item grain)
-              └── fct_orders (Incremental Fact - Order grain)
+Seeds / Sources
+├── raw_customers      ──► scd_customers (Snapshot, Type 2 SCD)
+├── raw_orders         ──► stg_orders
+├── raw_order_items    ──► stg_order_items
+└── raw_products       ──► stg_products
+
+Intermediate (Silver)
+├── int_order_items_with_products   ← stg_order_items + stg_products + stg_orders
+└── int_orders_enriched             ← stg_orders + stg_order_items (aggregated) + scd_customers
+
+Marts (Gold)
+├── dim_products       ← stg_products                  (Full Refresh, non-historized)
+├── fct_order_items    ← int_order_items_with_products  (Incremental, line-item grain)
+└── fct_orders         ← int_orders_enriched            (Incremental, order grain)
 ```
 
 ## 📁 Project Structure
@@ -23,7 +30,6 @@ job_ready_dbt/
 ├── models/
 │   ├── bronze/
 │   │   ├── _bronze_models.yml
-│   │   ├── stg_customers.sql
 │   │   ├── stg_orders.sql
 │   │   ├── stg_order_items.sql
 │   │   └── stg_products.sql
@@ -35,6 +41,7 @@ job_ready_dbt/
 │       ├── fct_order_items.sql
 │       └── fct_orders.sql
 ├── snapshots/
+│   └── scd_customers.sql
 ├── seeds/
 │   ├── raw_customers.csv
 │   ├── raw_orders.csv
@@ -51,10 +58,11 @@ job_ready_dbt/
 
 **Models:**
 
-- `stg_customers`: Cleans string attributes and email formatting.
 - `stg_orders`: Casts `order_date` to `DATE`.
 - `stg_order_items`: Pure structural passthrough with clean schema.
 - `stg_products`: Normalizes product names and categories.
+
+**No `stg_customers`, by design:** customer cleaning logic (`trim`/`lower`/`upper` on name, email, country) lives only in `scd_customers` (the snapshot). An earlier version of this project had both `stg_customers` and `scd_customers` reading directly from `raw_customers` with the exact same cleaning logic duplicated in two places — and `stg_customers` was never actually referenced by anything downstream (every model that needs customer data joins to `scd_customers`). It was removed to eliminate the duplication and the orphaned model; the `not_null`/`unique` tests that were on `stg_customers.customer_id` were moved to `scd_customers` instead.
 
 ### 2. Intermediate Layer (`models/silver/`)
 
