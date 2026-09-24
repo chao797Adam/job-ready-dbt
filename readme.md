@@ -261,10 +261,7 @@ limit 10;
 - **Watermark Limitations:** see [Resolved issue](#-resolved-order_date-could-not-serve-as-a-change-detection-watermark) above — `order_date` watermarking missed *any* status change on an order created before the current max date, not just same-day late arrivals. Fixed by switching to an `updated_at` watermark.
 - **Dedup Test Coverage:** see [Resolved issue](#-resolved-no-defensive-deduplication-before-merge-test-coverage-added) above — `unique`/`not_null` tests guard the gold-layer surrogate keys, and a `qualify row_number()` backstop in the model SQL now prevents fan-out duplicates from being written in the first place.
 
-这里是为你调整好的 Markdown 格式，采用二级标题（`##`）并将整个结构包裹在代码块展示框中：
 
-```markdown
-## ```markdown
 ## 🔍 Data Quality & Troubleshooting Case Study: Validating Grain & Source Consistency
 
 During the development of the Gold-layer fact models (`fct_order_items` and `fct_orders`), ad-hoc validation revealed a real-world data anomaly concerning order `ord_007`. 
@@ -282,7 +279,6 @@ select
     (quantity * unit_price) as calc_line_total
 from dbt_job_ready.gold.fct_order_items
 where order_id = 'ord_007';
-
 ```
 
 ### 2. Root Cause Analysis
@@ -290,10 +286,6 @@ where order_id = 'ord_007';
 * **Verification Result**: The line items correctly summed up to the accurate total (e.g., matching the multi-row product breakdown), confirming that the dbt transformation, join logic, and aggregation calculations were entirely correct.
 * **Source Anomaly**: The mismatch originated from an upstream mock-data inconsistency in raw_orders.csv, where the header-level amount was mismatched with the actual item details.
 * **Takeaway**: This highlights the critical importance of multi-layer data modeling, clear metric isolation (using line_total at the line-item grain), and implementing robust dbt generic/singular tests to catch upstream data drift early.
-
-```
-
-```
 
 ## 🚀 Quickstart
 
