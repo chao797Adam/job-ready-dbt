@@ -215,6 +215,25 @@ Verified via `dbt run --select fct_orders fct_order_items` (no `--full-refresh` 
 
 Both landed correctly in `gold.fct_orders`, confirming the `merge_update_columns` config — present since the original version of this project but silently non-functional under the old watermark — now does what it was always meant to do.
 
+## 📊 Ad-hoc Analyses & Business Insights
+
+To validate that the Gold-layer fact models effectively answer core e-commerce questions, verification and ad-hoc analysis queries are maintained under `analyses/`:
+
+* **Product Performance**: Ranks products by total revenue and units sold using line-item grain metrics (`line_total`).
+* **Category Breakdown**: Aggregates sales performance by product category to evaluate revenue contribution.
+
+**Example (Product Sales Performance Analysis):**
+```sql
+select 
+    product_id, 
+    product_name,
+    sum(line_total) as total_revenue, 
+    sum(quantity) as total_units
+from {{ ref('fct_order_items') }}
+group by product_id, product_name
+order by total_revenue desc
+limit 10;
+
 ## 🛡️ Engineering Best Practices & Trade-offs
 
 - **Anti-Fan-Out Pre-Aggregation:** In `int_orders_enriched`, item metrics are rolled up via `GROUP BY order_id` before joining to orders. Direct joining of 1-to-many child rows to parent headers without pre-aggregation causes metric multiplication/fan-out.
