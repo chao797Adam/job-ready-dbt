@@ -228,7 +228,7 @@ To validate that the Gold-layer fact models effectively answer core e-commerce q
 
 **BI Consumption Example:** the query behind analysis #2 (Category-Level Revenue Breakdown) was visualized as a Databricks Dashboard, confirming `fct_order_items` is directly queryable by downstream BI tools without further transformation.
 
-![Revenue by Category Dashboard](asset/dashboard-revenue_per_catelog.png)
+![Revenue by Category Dashboard](asset/dashboard-revenue%20per%20catelog.png)
 
 ## 🛡️ Engineering Best Practices & Trade-offs
 
