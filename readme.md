@@ -198,6 +198,15 @@ final as (
 
 Verified via `dbt run --select fct_orders fct_order_items` (no `--full-refresh` needed — this only adds a filter, no schema change): both models built successfully, `PASS=2 WARN=0 ERROR=0`.
 
+**End-to-end upsert test:** to confirm the fix actually works end-to-end (not just "runs without error"), `ord_018`'s `status`/`updated_at` was edited in place and a brand-new `ord_021` row was added to `raw_orders.csv`, then re-run incrementally (`dbt seed --select raw_orders` → `dbt run --select +fct_orders`, no `--full-refresh`):
+
+| order_id | status | updated_at | confirms |
+| --- | --- | --- | --- |
+| `ord_018` | `delivered` | 2024-07-25 10:00:00 | **update** path works — this is the exact order the original `order_date` watermark bug could never re-select |
+| `ord_021` | `pending` | 2024-07-25 10:30:00 | **insert** path still works for genuinely new orders |
+
+Both landed correctly in `gold.fct_orders`, confirming the `merge_update_columns` config — present since the original version of this project but silently non-functional under the old watermark — now does what it was always meant to do.
+
 ## 🛡️ Engineering Best Practices & Trade-offs
 
 - **Anti-Fan-Out Pre-Aggregation:** In `int_orders_enriched`, item metrics are rolled up via `GROUP BY order_id` before joining to orders. Direct joining of 1-to-many child rows to parent headers without pre-aggregation causes metric multiplication/fan-out.
