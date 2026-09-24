@@ -59,7 +59,7 @@ order by total_revenue desc
 limit 20
 ;
 
-%s ql
+
 -- 6. Which customer has more than one order?
 with
     cte
