@@ -210,6 +210,24 @@ Both landed correctly in `gold.fct_orders`, confirming the `merge_update_columns
 ## 🛡️ Engineering Best Practices & Trade-offs
 
 - **Anti-Fan-Out Pre-Aggregation:** In `int_orders_enriched`, item metrics are rolled up via `GROUP BY order_id` before joining to orders. Direct joining of 1-to-many child rows to parent headers without pre-aggregation causes metric multiplication/fan-out.
+
+  ```sql
+  -- ❌ Fan-out: an order with 3 items gets duplicated into 3 rows,
+  --    so summing total_amount later triple-counts it
+  select o.order_id, o.total_amount, oi.product_id
+  from orders o
+  left join stg_order_items oi on o.order_id = oi.order_id
+
+  -- ✅ Pre-aggregate to order grain first, then join — one row per order
+  with order_items as (
+      select order_id, sum(quantity * unit_price) as total_revenue
+      from stg_order_items
+      group by order_id
+  )
+  select o.order_id, o.total_amount, oi.total_revenue
+  from orders o
+  left join order_items oi on o.order_id = oi.order_id
+  ```
 - **Surrogate Key Determinism:** Utilizing `dbt_utils.generate_surrogate_key()` ensures cross-run consistency for surrogate primary/foreign keys.
 - **SCD Join Boundary:** Current-state customer attributes are bound via `dbt_valid_to is null` (As-Is representation). Point-in-time (As-Was) financial attribution would require valid-range temporal window joins.
 - **Watermark Limitations:** see [Resolved issue](#-resolved-order_date-could-not-serve-as-a-change-detection-watermark) above — `order_date` watermarking missed *any* status change on an order created before the current max date, not just same-day late arrivals. Fixed by switching to an `updated_at` watermark.
