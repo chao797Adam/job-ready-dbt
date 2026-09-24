@@ -152,7 +152,7 @@ models:
         tests: [unique, not_null]
 ```
 
-Verified via `dbt test`: all 6 new tests pass (`unique_fct_orders_order_key`, `unique_fct_order_items_order_item_key`, `unique_dim_products_product_key`, plus their `not_null` counterparts), bringing total project test count from 11 to 17 — `PASS=17 WARN=0 ERROR=0`.
+Verified via `dbt test`: `unique_fct_orders_order_key`, `unique_fct_order_items_order_item_key`, `unique_dim_products_product_key`, plus their `not_null` counterparts, all pass. (Total project test count moved from 11 → 17 when these 6 were added, then to 16 after `stg_customers` was later removed — its 2 tests were replaced by a single `not_null` test on `scd_customers.customer_id`. Latest run: `PASS=16 WARN=0 ERROR=0`.)
 
 **Fix applied — dedup backstop added:** both fact models now include a `qualify row_number() = 1` step after their `final` CTE's `from`, so a fan-out can no longer produce duplicate rows in the first place (not just get caught by a test afterward):
 
