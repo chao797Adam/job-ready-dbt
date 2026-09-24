@@ -25,9 +25,9 @@ Marts (Gold)
 
 To balance execution agility, cloud storage costs, and query performance, the project adopts a tiered materialization strategy across layers:
 
-* **Staging (`models/bronze/`)**: `+materialized: view` — Lightweight, zero-storage transformations that always pull the latest raw seed/source data on-the-fly.
-* **Intermediate (`models/silver/`)**: `+materialized: view` — Encapsulates complex joins and pre-aggregations as views to avoid redundant physical storage while keeping business logic modular.
-* **Marts (`models/gold/`)**: `+materialized: table` — Heavy analytics-ready tables optimized for BI consumption. Fact models (`fct_orders`, `fct_order_items`) specifically leverage an **incremental** strategy with `merge` to process only new or updated partitions efficiently.
+- **Staging (`models/bronze/`)**: `+materialized: view` — Lightweight, zero-storage transformations that always pull the latest raw seed/source data on-the-fly.
+- **Intermediate (`models/silver/`)**: `+materialized: view` — Encapsulates complex joins and pre-aggregations as views to avoid redundant physical storage while keeping business logic modular.
+- **Marts (`models/gold/`)**: `+materialized: table` — Heavy analytics-ready tables optimized for BI consumption. Fact models (`fct_orders`, `fct_order_items`) specifically leverage an **incremental** strategy with `merge` to process only new or updated partitions efficiently.
 
 ## 📁 Project Structure
 
@@ -219,21 +219,12 @@ Both landed correctly in `gold.fct_orders`, confirming the `merge_update_columns
 
 To validate that the Gold-layer fact models effectively answer core e-commerce questions, verification and ad-hoc analysis queries are maintained under `analyses/`:
 
-* **Product Performance**: Ranks products by total revenue and units sold using line-item grain metrics (`line_total`).
-* **Category Breakdown**: Aggregates sales performance by product category to evaluate revenue contribution.
-
-**Example (Product Sales Performance Analysis):**
-```sql
-select 
-    product_id, 
-    product_name,
-    sum(line_total) as total_revenue, 
-    sum(quantity) as total_units
-from {{ ref('fct_order_items') }}
-group by product_id, product_name
-order by total_revenue desc
-limit 10;
-```
+1. **Top Products by Revenue & Units Sold** — ranks products by total revenue and units sold using line-item grain metrics (`line_total`, `quantity`) from `fct_order_items`.
+2. **Category-Level Revenue Breakdown** — aggregates `fct_order_items` by `category` to evaluate revenue contribution per product category.
+3. **Average Order Value per Month** — buckets `fct_orders` by `date_trunc('month', order_date)`, computing monthly revenue, order count, and AOV (`monthly_revenue / monthly_orders`).
+4. **Revenue by Country** — aggregates `fct_orders` by `country` to identify the highest-revenue markets.
+5. **Top Customers by Revenue** — joins `fct_orders` to `scd_customers` (`dbt_valid_to is null`, current customer attributes only) to rank customers by total revenue and order count.
+6. **Repeat Customers** — a `having count(order_id) > 1` filter on `fct_orders` grouped by `customer_id`, joined back to `scd_customers` for contact details, to identify customers with more than one order.
 
 ## 🛡️ Engineering Best Practices & Trade-offs
 
@@ -261,12 +252,12 @@ limit 10;
 - **Watermark Limitations:** see [Resolved issue](#-resolved-order_date-could-not-serve-as-a-change-detection-watermark) above — `order_date` watermarking missed *any* status change on an order created before the current max date, not just same-day late arrivals. Fixed by switching to an `updated_at` watermark.
 - **Dedup Test Coverage:** see [Resolved issue](#-resolved-no-defensive-deduplication-before-merge-test-coverage-added) above — `unique`/`not_null` tests guard the gold-layer surrogate keys, and a `qualify row_number()` backstop in the model SQL now prevents fan-out duplicates from being written in the first place.
 
-
 ## 🔍 Data Quality & Troubleshooting Case Study: Validating Grain & Source Consistency
 
-During the development of the Gold-layer fact models (`fct_order_items` and `fct_orders`), ad-hoc validation revealed a real-world data anomaly concerning order `ord_007`. 
+During the development of the Gold-layer fact models (`fct_order_items` and `fct_orders`), ad-hoc validation revealed a real-world data anomaly concerning order `ord_007`.
 
 ### 1. The Investigation
+
 When comparing header-level totals with line-item aggregates, a discrepancy was identified in `ord_007` (where the header `total_amount` did not match the sum of its items). To isolate and verify the issue at the line-item grain, the following verification query was executed against the Gold layer:
 
 ```sql
@@ -283,9 +274,9 @@ where order_id = 'ord_007';
 
 ### 2. Root Cause Analysis
 
-* **Verification Result**: The line items correctly summed up to the accurate total (e.g., matching the multi-row product breakdown), confirming that the dbt transformation, join logic, and aggregation calculations were entirely correct.
-* **Source Anomaly**: The mismatch originated from an upstream mock-data inconsistency in raw_orders.csv, where the header-level amount was mismatched with the actual item details.
-* **Takeaway**: This highlights the critical importance of multi-layer data modeling, clear metric isolation (using line_total at the line-item grain), and implementing robust dbt generic/singular tests to catch upstream data drift early.
+- **Verification Result**: The line items correctly summed up to the accurate total (e.g., matching the multi-row product breakdown), confirming that the dbt transformation, join logic, and aggregation calculations were entirely correct.
+- **Source Anomaly**: The mismatch originated from an upstream mock-data inconsistency in raw_orders.csv, where the header-level amount was mismatched with the actual item details.
+- **Takeaway**: This highlights the critical importance of multi-layer data modeling, clear metric isolation (using line_total at the line-item grain), and implementing robust dbt generic/singular tests to catch upstream data drift early.
 
 ## 🚀 Quickstart
 

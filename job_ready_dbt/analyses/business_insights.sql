@@ -62,8 +62,7 @@ limit 20
 
 -- 6. Which customer has more than one order?
 with
-    cte
-    (
+    cte as (
         select customer_id, count(order_id) as no_of_order
         from dbt_job_ready.gold.fct_orders
         group by customer_id
