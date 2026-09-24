@@ -21,6 +21,14 @@ Marts (Gold)
 └── fct_orders         ← int_orders_enriched            (Incremental, order grain)
 ```
 
+## ⚙️ Materialization & Storage Strategy
+
+To balance execution agility, cloud storage costs, and query performance, the project adopts a tiered materialization strategy across layers:
+
+* **Staging (`models/bronze/`)**: `+materialized: view` — Lightweight, zero-storage transformations that always pull the latest raw seed/source data on-the-fly.
+* **Intermediate (`models/silver/`)**: `+materialized: view` — Encapsulates complex joins and pre-aggregations as views to avoid redundant physical storage while keeping business logic modular.
+* **Marts (`models/gold/`)**: `+materialized: table` — Heavy analytics-ready tables optimized for BI consumption. Fact models (`fct_orders`, `fct_order_items`) specifically leverage an **incremental** strategy with `merge` to process only new or updated partitions efficiently.
+
 ## 📁 Project Structure
 
 ```

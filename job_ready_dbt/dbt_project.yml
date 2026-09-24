@@ -21,7 +21,7 @@ clean-targets:
 models:
   job_ready_dbt:
     bronze:
-      +materialized: table
+      +materialized: view
       +schema: bronze        
     silver:
       +materialized: view
