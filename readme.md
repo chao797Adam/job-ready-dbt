@@ -47,7 +47,8 @@ job_ready_dbt/
 │   └── gold/ (marts)
 │       ├── dim_products.sql
 │       ├── fct_order_items.sql
-│       └── fct_orders.sql
+│       ├── fct_orders.sql
+│       └── _gold_models.yml
 ├── snapshots/
 │   └── scd_customers.sql
 ├── seeds/
