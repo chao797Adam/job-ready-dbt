@@ -24,7 +24,7 @@ models:
         tests: [not_null]
 
   - name: stg_products
-    description: "Staging view of products."
+    description: "Staging view of products. Can contain multiple historical versions per product_id due to SCD2 tracking."
     columns:
       - name: product_id
-        tests: [unique, not_null]
+        tests: [not_null]

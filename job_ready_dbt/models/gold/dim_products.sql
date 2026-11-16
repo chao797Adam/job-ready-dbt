@@ -1,14 +1,18 @@
--- Dimension: one row per product
 with
-    products as (select * from {{ ref('stg_products') }}),
+    snapshot as (select * from {{ ref('scd_products') }}),
     final as (
         select
             product_id,
             product_name,
             category,
             price,
-            {{ dbt_utils.generate_surrogate_key(['product_id']) }} as product_key
-        from products
+            updated_at,
+            {{ dbt_utils.generate_surrogate_key(['product_id', 'dbt_valid_from']) }}
+            as product_key,  --
+            dbt_valid_from,
+            dbt_valid_to
+        from snapshot
+        where dbt_valid_to is null  --
     )
 select *
 from final
