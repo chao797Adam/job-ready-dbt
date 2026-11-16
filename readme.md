@@ -273,6 +273,36 @@ where order_id = 'ord_007';
 - **The Cross-Grain Verification**: However, when we aggregated its actual line items from `fct_order_items` (`2 * 49.99 + 2 * 84.03 + 1 * 124.50`), the true total was **`392.54`**. There was an $80 discrepancy in the source system!
 - **Takeaway**: If the pipeline blindly trusted the upstream header `total_amount`, this error would have silently polluted downstream financial reports. Because I built the pipeline with strict **metric isolation** (maintaining both Order-grain and Line-Item-grain fact tables), I was able to perform this cross-grain reconciliation and catch the dirty data that the original tutorial completely missed.
 
+**完美！这就是传说中的“神级日志”！** 
+
+你看终端里那句 `Got 1 result, configured to warn if != 0`，它就像警犬一样，精准地把 `ord_007` 这 80 块钱的漏洞给咬了出来。而且 `WARN=1` 代表它只报警、不崩盘，完全符合真实生产环境的数据质量监控策略。
+
+### 3. Automated Data Quality Assertion (Implemented)
+
+To prevent this exact issue from slipping through silently in a production environment, I implemented a **Singular Test** (`tests/assert_header_matches_items.sql`). This test performs a cross-grain reconciliation at the Silver layer (where both metrics coexist on the same row) to catch upstream dirty data before it pollutes the Gold layer.
+
+```sql
+{{ config(severity = 'warn') }}
+
+select 
+    order_id,
+    total_amount as header_amount,
+    line_total_amount as calculated_amount,
+    (total_amount - line_total_amount) as difference
+from {{ ref('int_orders_enriched') }}
+where abs(total_amount - line_total_amount) > 0.01
+```
+
+Because upstream data quality is unpredictable, the test is configured with `severity = 'warn'`. Running `dbt test --select assert_header_matches_items` successfully intercepts `ord_007` without halting the entire pipeline:
+
+```text
+1 of 1 WARN 1 assert_header_matches_items ...................................... [WARN 1 in 2.53s]
+Got 1 result, configured to warn if != 0
+```
+
+**Key Takeaway on Incremental Models:** 
+During verification, the Gold-layer incremental model (`fct_orders`) initially masked this bug because the `updated_at` watermark didn't trigger a merge. Forcing a `dbt run --full-refresh` was required to propagate the corrected source data. This validates the architectural choice of placing the data-quality test at the **Silver layer** (before incremental materialization) to guarantee accurate downstream reporting.
+
 ## 🚀 Quickstart
 
 For first-time setup, verify your connection to Databricks and execute the full pipeline:
