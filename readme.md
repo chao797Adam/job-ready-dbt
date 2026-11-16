@@ -247,6 +247,20 @@ select * from repeat_customers;
 **Key Takeaway (The "Why"):**
 By moving the `LEFT JOIN` upstream into the Silver layer and materializing a wide fact table, I eliminate the need for downstream BI queries to perform expensive joins on massive fact tables. This drastically improves **query performance**, reduces **compute costs (cluster hours)**, and simplifies the SQL for analysts.
 
+**Proof of the SCD2 Fan-out Bug in the Tutorial:**
+*The screenshot below shows the actual execution result from the tutorial's own code. Notice the highlighted rows (red arrows): `cust_001` (Alice Johnson) is returned **twice**, each showing 4 orders.*
+
+![Tutorial Fan-out Bug](./asset/tutorial_fanout_bug.png)
+
+This is a classic **SCD2 fan-out**. Because the tutorial's query performed an unconditional `JOIN` to `scd_customers` without filtering for the active record (`dbt_valid_to IS NULL`), Alice's two historical versions duplicated her row in the final aggregation. In a real business scenario, this would cause Alice's order count to be artificially inflated to 8, leading to completely wrong business decisions.
+
+**My OBT Architecture is Naturally Immune (Result Proof):**
+*The screenshot below shows the result of my single-table query against the OBT architecture.* 
+
+![OBT Single Table Result](./asset/obt_single_table_result.png)
+
+Because `fct_orders` already resolved the active SCD2 state at the Silver layer, my downstream aggregation query requires **zero joins**. Notice that `cust_001` (Alice) appears exactly **once**, with her updated email (`alice.updated@email.com`) and the mathematically accurate order count of **4**. No duplicates, no fan-out.
+
 ## 🛡️ Engineering Best Practices & Trade-offs
 
 - **Anti-Fan-Out Pre-Aggregation:** In `int_orders_enriched`, item metrics are rolled up via `GROUP BY order_id` before joining to orders. Direct joining of 1-to-many child rows to parent headers without pre-aggregation causes metric multiplication/fan-out.
