@@ -267,11 +267,11 @@ from dbt_job_ready.gold.fct_order_items
 where order_id = 'ord_007';
 ```
 
-### 2. Root Cause Analysis
+### 2. Root Cause Analysis (The Upstream Data Bug)
 
-- **Verification Result**: The line items correctly summed up to the accurate total, confirming that the dbt transformation, join logic, and aggregation calculations were entirely correct.
-- **Source Anomaly**: The mismatch originated from an upstream mock-data inconsistency in `raw_orders.csv`, where the header-level amount was mismatched with the actual item details.
-- **Takeaway**: This highlights the critical importance of multi-layer data modeling, clear metric isolation (using `line_total` at the line-item grain), and implementing robust dbt generic/singular tests to catch upstream data drift early.
+- **The Original Anomaly**: In the original source data (`raw_orders.csv`), `ord_007`'s header `total_amount` was recorded as **`312.50`**.
+- **The Cross-Grain Verification**: However, when we aggregated its actual line items from `fct_order_items` (`2 * 49.99 + 2 * 84.03 + 1 * 124.50`), the true total was **`392.54`**. There was an $80 discrepancy in the source system!
+- **Takeaway**: If the pipeline blindly trusted the upstream header `total_amount`, this error would have silently polluted downstream financial reports. Because I built the pipeline with strict **metric isolation** (maintaining both Order-grain and Line-Item-grain fact tables), I was able to perform this cross-grain reconciliation and catch the dirty data that the original tutorial completely missed.
 
 ## 🚀 Quickstart
 
