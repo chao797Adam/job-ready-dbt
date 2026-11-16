@@ -458,9 +458,9 @@ dbt build --target dev
 dbt build --target prod
 ```
 
-### ⚙️ Automated Workflow Orchestration (Databricks Jobs)
+### ⚙️ Automated Workflow Orchestration & Environment Isolation
 
-Beyond local development, the entire ELT pipeline is automated and orchestrated as a **Databricks Job**. 
+Beyond local development, the entire ELT pipeline is automated and orchestrated as a **Databricks Job** and supports strict **Dev/Prod environment isolation** based on how it is executed.
 
 To prevent the classic "stale SCD2" bug (where downstream models read yesterday's snapshot), I designed a strict **dependency-aware execution sequence**:
 1. `dbt run --select bronze` (Build staging views first)
@@ -470,6 +470,30 @@ To prevent the classic "stale SCD2" bug (where downstream models read yesterday'
 **Key Characteristics:**
 *   **Idempotency:** Re-running the job without source data changes results in zero new rows in the fact tables or snapshots.
 *   **Data Quality Gate:** The final `dbt test` step serves as a hard gate. As seen in the execution log, the Singular Test successfully caught the `$80` source anomaly and logged it as a `WARN` without halting the entire pipeline.
+
+#### 🚀 Environment Execution Guide
+
+**Option 1: Running in Databricks Jobs (UI Orchestration)**
+When orchestrating this pipeline within a Databricks Workflow, Databricks dynamically injects its own connection profile. Therefore, `--target` flags should be omitted. To route the data to the production catalog, simply configure the **Catalog** setting in the Job UI to `dbt_job_ready_prod`:
+```text
+# Job UI Configuration: Catalog = dbt_job_ready_prod
+1. dbt seed
+2. dbt run --select bronze
+3. dbt snapshot
+4. dbt run --select silver gold
+5. dbt test
+```
+
+**Option 2: Running Locally via CLI (Target-based Routing)**
+When executing from a local terminal, environment switching is managed by the `--target` flag referencing the `profiles.yml`. To deploy or test against the production catalog locally, append `--target prod` to every command:
+```bash
+# Local CLI Production Execution
+dbt seed --target prod
+dbt run --select bronze --target prod
+dbt snapshot --target prod
+dbt run --select silver gold --target prod
+dbt test --target prod
+```
 
 ## Reference
 
