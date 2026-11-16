@@ -1,8 +1,8 @@
 {{
     config(
         materialized='incremental',
-        unique_key=['order_item_key'],
-        merge_update_columns=['quantity', 'unit_price', 'line_total', 'updated_at']
+        unique_key='order_item_key',
+        merge_update_columns=['quantity', 'unit_price', 'line_total', 'order_item_updated_at']
     )
 }}
 
@@ -12,34 +12,43 @@ with
         select *
         from {{ ref('int_order_items_with_products') }}
         {% if is_incremental() %}
-            where updated_at > (select max(updated_at) from {{ this }})
+            -- Align with the alias generated in the int layer
+            where
+                order_item_updated_at
+                > (select max(order_item_updated_at) from {{ this }})
         {% endif %}
     ),
 
     final as (
         select
-            {{ dbt_utils.generate_surrogate_key(['order_id', 'product_id']) }}
-            as order_item_key,
+            -- Line-item primary key: generated using the finest grain
+            {{ dbt_utils.generate_surrogate_key(['order_item_id']) }} as order_item_key,
+
+            -- Product foreign key: generated using product_id
             {{ dbt_utils.generate_surrogate_key(['product_id']) }} as product_key,
+
             order_item_id,
             order_id,
             product_id,
             quantity,
             unit_price,
             line_total,
-            created_at,
-            updated_at,
-            product_name,
-            category,
-            product_price,
+            order_item_created_at,
+            order_item_updated_at,
             customer_id,
             order_date,
             status,
-            order_total_amount
+            order_total_amount,
+            order_created_at,
+            order_updated_at,
+            product_name,
+            category,
+            product_price
         from order_items
+        -- Defensive deduplication backstop
         qualify
             row_number() over (
-                partition by order_id, product_id order by updated_at desc
+                partition by order_item_id order by order_item_updated_at desc
             )
             = 1
     )
