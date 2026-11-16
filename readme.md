@@ -275,19 +275,68 @@ where order_id = 'ord_007';
 
 ## 🚀 Quickstart
 
+For first-time setup, verify your connection to Databricks and execute the full pipeline:
+
 ```bash
-# 1. Load seed data into warehouse
+# 1. Verify database connection and profile configuration
+dbt debug
+
+# 2. Load seed data into the warehouse
 dbt seed
 
-# 2. Run data transformation pipeline (Bronze -> Silver -> Gold)
+# 3. Run the full transformation pipeline (Bronze -> Silver -> Gold)
 dbt run
 
-# 3. Execute automated data quality tests
+# 4. Execute automated data quality tests
 dbt test
 
-# 4. Generate and serve lineage documentation
+# 5. Generate and serve lineage documentation
 dbt docs generate
 dbt docs serve
+```
+
+## 🛠️ Developer Cheatsheet (Node Selection)
+
+During daily development, running the entire pipeline on every small change is slow and costly. dbt provides powerful node selection syntax to target specific layers or models. The `+` operator traverses the DAG (Directed Acyclic Graph) to select upstream and downstream dependencies.
+
+### 1. Layer-by-Layer Execution
+Target specific folders to save time:
+
+```bash
+# Run and test ONLY the Silver layer (Intermediate models)
+dbt run --select silver
+dbt test --select silver
+
+# Run and test ONLY the Gold layer (Marts)
+dbt run --select gold
+dbt test --select gold
+```
+
+### 2. Understanding the `+` Operator
+- **`model+` (Downstream)**: Selects the model **and everything that depends on it**. 
+  *(e.g., `dbt run --select int_orders_enriched+` runs `int_orders_enriched`, `fct_orders`, and `fct_order_items`)*
+- **`+model` (Upstream)**: Selects the model **and everything it depends on**. 
+  *(e.g., `dbt run --select +fct_orders` runs all staging models, snapshots, and intermediate models needed for `fct_orders`)*
+- **`+model+` (Both)**: Traverses both upstream and downstream dependencies.
+
+### 3. Common Production Workflows
+
+**Scenario A: You just modified the logic in `int_order_items_with_products`**
+Rebuild this model and run everything downstream of it, then test the affected nodes.
+```bash
+dbt run --select int_order_items_with_products+
+dbt test --select int_order_items_with_products+
+```
+
+**Scenario B: You added a new column (Requires Full Refresh)**
+Incremental models won't pick up schema changes (like new columns) automatically. Force a full rebuild for the target and its downstream dependencies.
+```bash
+dbt run --full-refresh --select fct_orders+
+```
+
+**Scenario C: You only want to test specific models without running them again**
+```bash
+dbt test --select fct_orders fct_order_items
 ```
 
 ## 🚢 Deployment
