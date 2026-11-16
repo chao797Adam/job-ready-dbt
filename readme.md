@@ -256,6 +256,28 @@ To validate that the Gold-layer fact models effectively answer core e-commerce q
 - **SCD Join Boundary:** Current-state customer attributes are bound via `dbt_valid_to is null` (As-Is representation). Point-in-time (As-Was) financial attribution would require valid-range temporal window joins.
 - **Watermark Limitations:** see [Resolved issue](#-resolved-order_date-could-not-serve-as-a-change-detection-watermark) above — `order_date` watermarking missed *any* status change on an order created before the current max date, not just same-day late arrivals. Fixed by switching to an `updated_at` watermark.
 - **Dedup Test Coverage:** see [Resolved issue](#-resolved-no-defensive-deduplication-before-merge-test-coverage-added) above — `unique`/`not_null` tests guard the gold-layer surrogate keys, and a `qualify row_number()` backstop in the model SQL now prevents fan-out duplicates from being written in the first place.
+- **Snapshot Source Uniqueness:** see [Resolved issue](#-resolved-snapshot-source-must-guarantee-uniqueness-no-direct-ref-on-seeds) below — SCD2 snapshots strictly require a source with guaranteed one-row-per-key. Directly snapshotting raw seeds/sources risks spurious historical versions or merge failures.
+
+### ✅ Resolved: Snapshot Source Must Guarantee Uniqueness (No Direct `ref` on Seeds)
+
+**The problem (common tutorial anti-pattern):** The original reference tutorial (and many others) points the `dbt snapshot` directly at the raw seed/source table (e.g., `ref('raw_customers')`) and applies cleaning logic (`trim`, `lower`) inside the snapshot query.
+
+**Why this is dangerous:**
+1. **No Uniqueness Guarantee:** Seed or raw source tables do not guarantee that the `unique_key` is actually unique. If the CSV contains duplicate `customer_id`s, dbt's `strategy='check'` will either silently generate spurious historical versions (polluting the SCD2 history) or fail with a `Multiple source rows matched` error.
+2. **False Positives from Uncleaned Data:** If cleaning logic is inside the snapshot, any minor upstream drift (e.g., `" John"` vs `"John"`) will be detected as a "business change," creating meaningless history rows.
+3. **Conflating Responsibilities:** Snapshotting should *only* track changes. Data cleansing and deduplication are separate concerns that belong to the staging layer.
+
+**Fix applied:**
+We enforce a strict boundary. `scd_customers` reads *only* from `stg_customers`, which acts as a "cleansing gate":
+1. **Cleanse & Cast:** Applied `trim()`, `lower()`, `upper()` and type casting in `stg_customers`.
+2. **Deduplicate:** Applied `qualify row_number() over (partition by customer_id order by updated_at desc) = 1` in the staging model to guarantee one row per key.
+3. **Snapshot:** The snapshot simply selects from this guaranteed-unique, clean view without any internal transformation.
+
+**Verification:**
+We intentionally injected a duplicate `customer_id` and a row with extra whitespace into the raw seed. After running `dbt run` and `dbt snapshot`:
+- The duplicate was filtered out by `stg_customers`.
+- The whitespace difference was normalized and did *not* create a new SCD2 version.
+- The snapshot table remained clean and stable.
 
 ## 🔍 Data Quality & Troubleshooting Case Study: Validating Grain & Source Consistency
 
