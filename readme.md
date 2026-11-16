@@ -250,14 +250,14 @@ By moving the `LEFT JOIN` upstream into the Silver layer and materializing a wid
 **Proof of the SCD2 Fan-out Bug in the Tutorial:**
 *The screenshot below shows the actual execution result from the tutorial's own code. Notice the highlighted rows (red arrows): `cust_001` (Alice Johnson) is returned **twice**, each showing 4 orders.*
 
-![Tutorial Fan-out Bug](./asset/tutorial_fanout_bug.png)
+![Tutorial Fan-out Bug](job_ready_dbt/asset/tutorial_fanout_bug.png)
 
 This is a classic **SCD2 fan-out**. Because the tutorial's query performed an unconditional `JOIN` to `scd_customers` without filtering for the active record (`dbt_valid_to IS NULL`), Alice's two historical versions duplicated her row in the final aggregation. In a real business scenario, this would cause Alice's order count to be artificially inflated to 8, leading to completely wrong business decisions.
 
 **My OBT Architecture is Naturally Immune (Result Proof):**
 *The screenshot below shows the result of my single-table query against the OBT architecture.* 
 
-![OBT Single Table Result](./asset/obt_single_table_result.png)
+![OBT Single Table Result](job_ready_dbt/asset/obt_single_table_result.png)
 
 Because `fct_orders` already resolved the active SCD2 state at the Silver layer, my downstream aggregation query requires **zero joins**. Notice that `cust_001` (Alice) appears exactly **once**, with her updated email (`alice.updated@email.com`) and the mathematically accurate order count of **4**. No duplicates, no fan-out.
 
