@@ -299,6 +299,9 @@ Got 1 result, configured to warn if != 0
 **Key Takeaway on Incremental Models:** 
 During verification, the Gold-layer incremental model (`fct_orders`) initially masked this bug because the `updated_at` watermark didn't trigger a merge. Forcing a `dbt run --full-refresh` was required to propagate the corrected source data. This validates the architectural choice of placing the data-quality test at the **Silver layer** (before incremental materialization) to guarantee accurate downstream reporting.
 
+**The True Value of Singular Tests (Business Logic Validation):**
+Generic tests (`unique`, `not_null`) only guarantee *structural integrity* (e.g., no duplicate primary keys). They do not catch business logic errors. This Singular Test highlights the shift from "code that runs" to "data that can be trusted." By codifying the business rule (`header_amount == calculated_line_item_amount`), we transform a one-off ad-hoc query into a permanent, automated data quality gate.
+
 ## 🚀 Quickstart
 
 For first-time setup, verify your connection to Databricks and execute the full pipeline:
