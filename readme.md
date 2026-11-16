@@ -164,7 +164,8 @@ models:
         tests: [unique, not_null]
 ```
 
-Verified via `dbt test`: `unique_fct_orders_order_key`, `unique_fct_order_items_order_item_key`, `unique_dim_products_product_key`, plus their `not_null` counterparts, all pass. (Total project test count moved from 11 → 17 when these 6 were added, then to 16 after `stg_customers` was later removed — its 2 tests were replaced by a single `not_null` test on `scd_customers.customer_id`. Latest run: `PASS=16 WARN=0 ERROR=0`.)
+**Latest run: `PASS=19 WARN=1 ERROR=0 TOTAL=20`.** 
+*(Note: The single `WARN` is the intentionally designed singular test `assert_header_matches_items`, successfully intercepting the upstream data anomaly without crashing the pipeline.)*
 
 **Fix applied — dedup backstop added:** both fact models now include a `qualify row_number() = 1` step after their `final` CTE's `from`, so a fan-out can no longer produce duplicate rows in the first place:
 
@@ -456,6 +457,19 @@ job_ready_dbt:
 dbt build --target dev
 dbt build --target prod
 ```
+
+### ⚙️ Automated Workflow Orchestration (Databricks Jobs)
+
+Beyond local development, the entire ELT pipeline is automated and orchestrated as a **Databricks Job**. 
+
+To prevent the classic "stale SCD2" bug (where downstream models read yesterday's snapshot), I designed a strict **dependency-aware execution sequence**:
+1. `dbt run --select bronze` (Build staging views first)
+2. `dbt snapshot` (Generate the latest SCD2 history based on the fresh staging data)
+3. `dbt run --select silver gold` (Build downstream marts using the *up-to-date* snapshots)
+
+**Key Characteristics:**
+*   **Idempotency:** Re-running the job without source data changes results in zero new rows in the fact tables or snapshots.
+*   **Data Quality Gate:** The final `dbt test` step serves as a hard gate. As seen in the execution log, the Singular Test successfully caught the `$80` source anomaly and logged it as a `WARN` without halting the entire pipeline.
 
 ## Reference
 
