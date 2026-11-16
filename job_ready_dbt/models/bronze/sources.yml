@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: raw_ecommerce
+    schema: seeds  
+    tables:
+      - name: raw_orders
+      - name: raw_order_items
+      - name: raw_products
+      - name: raw_customers

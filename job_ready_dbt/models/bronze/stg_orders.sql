@@ -1,4 +1,4 @@
-with source as (select * from {{ ref('raw_orders') }})
+with source as (select * from {{ source('raw_ecommerce', 'raw_orders') }})
 select
     order_id,
     customer_id,

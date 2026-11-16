@@ -1,20 +1,11 @@
 {% snapshot scd_customers %}
-    {{
-    config(
+    {{ config(
         target_schema='silver',
         unique_key='customer_id',
         strategy='check',
-        check_cols=['first_name', 'last_name', 'email', 'country'],
-    )
-}}
+        check_cols=['first_name', 'last_name', 'email', 'country']
+    )}}
 
-    select
-        customer_id,
-        trim(first_name) as first_name,
-        trim(last_name) as last_name,
-        lower(trim(email)) as email,
-        upper(trim(country)) as country,
-        created_at
-    from {{ ref('raw_customers') }}
-
+    select customer_id, first_name, last_name, email, country, created_at
+    from {{ ref('stg_customers') }}
 {% endsnapshot %}
