@@ -207,6 +207,46 @@ To validate that the Gold-layer fact models effectively answer core e-commerce q
 
 ![Revenue by Category Dashboard](job_ready_dbt/asset/dashboard-revenue%20per%20catelog.png)
 
+### ⚡ Architectural Advantage: OBT (One Big Table) vs. Traditional Star Schema Join
+
+To validate the architectural decisions made in the Gold layer, I compared my ad-hoc query approach against the traditional tutorial approach for finding repeat customers.
+
+**The Traditional Approach (Tutorial):**
+The tutorial's query requires a subquery aggregation on `fct_orders`, followed by a `LEFT JOIN` to the `scd_customers` dimension table to retrieve customer details (`first_name`, `last_name`). 
+
+```sql
+-- Tutorial Approach: Requires Subquery + Join
+SELECT c.customer_id, c.first_name, c.last_name, o.no_of_orders
+FROM (
+    SELECT customer_id, COUNT(order_id) as no_of_orders
+    FROM workspace.gold.fct_orders
+    GROUP BY customer_id
+    HAVING COUNT(order_id) > 1
+) o
+JOIN workspace.gold.scd_customers c ON o.customer_id = c.customer_id;
+```
+
+**My Approach (OBT Architecture):**
+Because I denormalized the active customer attributes into `fct_orders` during the Silver layer transformation (`dbt_valid_to IS NULL` filter), the Gold fact table acts as an **OBT (One Big Table)**. The query becomes a single-table aggregation with zero joins.
+
+```sql
+-- My Approach: Single-table scan, zero joins
+with repeat_customers as (
+    select 
+        customer_id,
+        ANY_VALUE(first_name) as first_name,
+        ANY_VALUE(last_name) as last_name,
+        COUNT(order_id) as total_orders
+    from dbt_job_ready.gold.fct_orders
+    group by customer_id
+    having count(order_id) > 1
+)
+select * from repeat_customers;
+```
+
+**Key Takeaway (The "Why"):**
+By moving the `LEFT JOIN` upstream into the Silver layer and materializing a wide fact table, I eliminate the need for downstream BI queries to perform expensive joins on massive fact tables. This drastically improves **query performance**, reduces **compute costs (cluster hours)**, and simplifies the SQL for analysts.
+
 ## 🛡️ Engineering Best Practices & Trade-offs
 
 - **Anti-Fan-Out Pre-Aggregation:** In `int_orders_enriched`, item metrics are rolled up via `GROUP BY order_id` before joining to orders. Direct joining of 1-to-many child rows to parent headers without pre-aggregation causes metric multiplication/fan-out.
