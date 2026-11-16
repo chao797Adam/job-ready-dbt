@@ -7,18 +7,18 @@ An industry-standard, analytics-engineering-grade dbt modeling project for an e-
 ```
 Seeds / Sources
 ├── raw_customers      ──► scd_customers (Snapshot, Type 2 SCD)
+├── raw_products       ──► stg_products  ──► scd_products (Snapshot, Type 2 SCD)
 ├── raw_orders         ──► stg_orders
-├── raw_order_items    ──► stg_order_items
-└── raw_products       ──► stg_products
+└── raw_order_items    ──► stg_order_items
 
 Intermediate (Silver)
-├── int_order_items_with_products   ← stg_order_items + stg_products + stg_orders
-└── int_orders_enriched             ← stg_orders + stg_order_items (aggregated) + scd_customers
+├── int_order_items_with_products   ← stg_order_items + scd_products (current only) + stg_orders
+└── int_orders_enriched             ← stg_orders + stg_order_items (aggregated) + scd_customers (current only)
 
 Marts (Gold)
-├── dim_products       ← stg_products                  (Full Refresh, non-historized)
-├── fct_order_items    ← int_order_items_with_products  (Incremental, line-item grain)
-└── fct_orders         ← int_orders_enriched            (Incremental, order grain)
+├── dim_products       ← scd_products (current only, non-historized for BI)
+├── fct_order_items    ← int_order_items_with_products (Incremental, line-item grain)
+└── fct_orders         ← int_orders_enriched (Incremental, order grain)
 ```
 
 ## ⚙️ Materialization & Storage Strategy
@@ -50,7 +50,8 @@ job_ready_dbt/
 │       ├── fct_orders.sql
 │       └── _gold_models.yml
 ├── snapshots/
-│   └── scd_customers.sql
+│   ├── scd_customers.sql
+│   └── scd_products.sql
 ├── seeds/
 │   ├── raw_customers.csv
 │   ├── raw_orders.csv
@@ -67,11 +68,11 @@ job_ready_dbt/
 
 **Models:**
 
-- `stg_orders`: Casts `order_date` to `DATE`.
-- `stg_order_items`: Pure structural passthrough with clean schema.
-- `stg_products`: Normalizes product names and categories.
+- `stg_orders`: Casts `order_date` to `DATE`. Includes `created_at` / `updated_at`.
+- `stg_order_items`: Structural passthrough with clean schema. Includes `created_at` / `updated_at`.
+- `stg_products`: Normalizes product names and categories. Includes `created_at` / `updated_at`.
 
-**No `stg_customers`, by design:** customer cleaning logic (`trim`/`lower`/`upper` on name, email, country) lives only in `scd_customers` (the snapshot). An earlier version of this project had both `stg_customers` and `scd_customers` reading directly from `raw_customers` with the exact same cleaning logic duplicated in two places — and `stg_customers` was never actually referenced by anything downstream (every model that needs customer data joins to `scd_customers`). It was removed to eliminate the duplication and the orphaned model; the `not_null`/`unique` tests that were on `stg_customers.customer_id` were moved to `scd_customers` instead.
+**No `stg_customers`, by design:** customer cleaning logic (`trim`/`lower`/`upper` on name, email, country) lives only in `scd_customers` (the snapshot). An earlier version of this project had both `stg_customers` and `scd_customers` reading directly from `raw_customers` with the exact same cleaning logic duplicated in two places — and `stg_customers` was never actually referenced by anything downstream. It was removed to eliminate the duplication; the tests were moved to `scd_customers` instead.
 
 ### 2. Intermediate Layer (`models/silver/`)
 
@@ -79,10 +80,10 @@ job_ready_dbt/
 
 **Models:**
 
-- `int_order_items_with_products`: Joins order items with product catalogs and order metadata, computing line-item totals (`quantity * unit_price`).
+- `int_order_items_with_products`: Joins order items with product catalogs and order metadata, computing line-item totals (`quantity * unit_price`). **Crucially, it joins `scd_products` filtered by `where dbt_valid_to is null` to prevent SCD2 fan-out.**
 - `int_orders_enriched`: Pre-aggregates `stg_order_items` (`line_items`, `total_quantity`, `total_revenue` grouped by `order_id`) prior to joining with `stg_orders` and active SCD customer records (`scd_customers` where `dbt_valid_to is null`).
 
-**Why two intermediate models at two different grains:** the business questions this project needs to answer fall into two distinct grains. Questions about *orders as a whole* — revenue per order, average order value, orders per week — need **one row per order** (order grain), which is why `int_orders_enriched` deliberately collapses item-level rows into per-order summary metrics before joining to the order header. Questions about *what was sold* — revenue by product/category, units sold per product — need **one row per order line** (line grain), which is why `int_order_items_with_products` intentionally does *not* aggregate and instead keeps every line item, carrying `product_id` through so it can still be sliced by product. This is a deliberate grain decision, not redundant modeling: it's what produces the two separate fact tables (`fct_orders`, `fct_order_items`) in the marts layer below, each serving the question set that matches its grain.
+**Why two intermediate models at two different grains:** the business questions this project needs to answer fall into two distinct grains. Questions about *orders as a whole* — revenue per order, average order value, orders per week — need **one row per order** (order grain), which is why `int_orders_enriched` deliberately collapses item-level rows into per-order summary metrics. Questions about *what was sold* — revenue by product/category, units sold per product — need **one row per order line** (line grain), which is why `int_order_items_with_products` intentionally does *not* aggregate and instead keeps every line item. This is a deliberate grain decision, producing the two separate fact tables (`fct_orders`, `fct_order_items`) in the marts layer below.
 
 ### 3. Marts Layer (`models/gold/`)
 
@@ -90,7 +91,7 @@ job_ready_dbt/
 
 **Models:**
 
-- `dim_products`: Dimension table enriched with deterministic surrogate keys (`product_key`). **Full refresh** (not incremental) — the whole table is rebuilt from `stg_products` on every run; there's no `updated_at`-based change detection here because there's no merge logic to feed.
+- `dim_products`: Dimension table built on top of the SCD2 snapshot (`scd_products`). It filters for the current active state (`dbt_valid_to is null`) to serve as a Type 1 (current state) view for BI analysts, while the full history is preserved in the snapshot layer.
 - `fct_order_items`: Incremental fact table tracking line-item transactional performance.
 - `fct_orders`: Incremental fact table tracking order-level metrics, enriched customer profiles, and aggregate revenue.
 
@@ -109,20 +110,24 @@ Both fact models (`fct_orders`, `fct_order_items`) use incremental materializati
 
 ### ✅ Resolved: `order_date` Could Not Serve as a Change-Detection Watermark
 
-**The problem (as originally shipped):** the watermark filtered on `order_date`, which is the date the order was **first created** and never changes afterward. `merge_update_columns` was configured under the assumption that mutable attributes (like `status`) would be re-selected and merged whenever they changed. **These two things were incompatible**: `order_date` can only tell dbt "this is a new order," never "this existing order was updated." `merge_update_columns` silently failed to do its job for any order whose `order_date` fell before the current max — no matter how recently its `status` actually changed.
+**The problem (as originally shipped):** the watermark filtered on `order_date`, which is the date the order was **first created** and never changes afterward. `merge_update_columns` was configured under the assumption that mutable attributes (like `status`) would be re-selected and merged whenever they changed. **These two things were incompatible**: `order_date` can only tell dbt "this is a new order," never "this existing order was updated." `merge_update_columns` silently failed to do its job for any order whose `order_date` fell before the current max.
 
-**Concrete example that exposed the bug** (`raw_orders.csv`, max `order_date` = `2024-07-15`):
+**Fix applied:** added `created_at` / `updated_at` audit columns to `raw_orders` and `raw_order_items`, threaded them through `stg_orders` → `int_orders_enriched` → `fct_orders` (and the equivalent `order_items` chain), and repointed both incremental filters at `updated_at`. Verified via `dbt run --full-refresh` after the schema change.
 
-| order_id | order_date | status | Re-selected under old `order_date` watermark? | Re-selected under new `updated_at` watermark? |
-| --- | --- | --- | --- | --- |
-| `ord_018` | 2024-07-12 | `shipped` | ❌ No — `2024-07-12 < 2024-07-15`, filtered out forever | ✅ Yes — `updated_at` (2024-07-20) is newer than any previously loaded `updated_at` |
-| `ord_019` | 2024-07-14 | `processing` | ❌ No — same issue | ✅ Yes — `updated_at` (2024-07-22) is newer |
+> **Note on rolling out this kind of fix:** `fct_orders`/`fct_order_items` are `incremental` models. Once a table already exists, `dbt run` on an incremental model does a `MERGE` against the existing structure — it does **not** re-run `CREATE TABLE AS SELECT`, so newly added columns like `updated_at` won't appear on their own. Adding columns to an incremental model's output requires `dbt run --full-refresh`.
 
-**Why `order_date` fails but `updated_at` works:** `order_date` is written once at creation and frozen forever — it answers "is this a new order?", not "was this row touched?". `updated_at` is (by design) re-stamped every time a row changes, regardless of how old the row's `order_date` is, so it correctly answers the question the watermark actually needs answered.
+### ✅ Resolved: SCD2 Product Dimension Caused Fan-out in Line-Item Fact Models
 
-**Fix applied:** added `created_at` / `updated_at` audit columns to `raw_orders` and `raw_order_items`, threaded them through `stg_orders` → `int_orders_enriched` → `fct_orders` (and the equivalent `order_items` chain), and repointed both incremental filters at `updated_at`. `updated_at` was also added to `merge_update_columns` on both fact models so the row's own audit timestamp gets refreshed on every merge. Verified via `dbt run --full-refresh` after the schema change (required — see note below).
+**The problem (discovered during implementation):** 
+When implementing SCD2 for `products` by adding `created_at` and `updated_at` to the seed data, the `scd_products` snapshot correctly generated multiple historical versions per `product_id`. However, the `int_order_items_with_products` model was initially joining `stg_products` without deduplication. 
 
-> **Note on rolling out this kind of fix:** `fct_orders`/`fct_order_items` are `incremental` models. Once a table already exists, `dbt run` on an incremental model does a `MERGE` against the existing structure — it does **not** re-run `CREATE TABLE AS SELECT`, so newly added columns like `updated_at` won't appear on their own. Adding columns to an incremental model's output requires `dbt run --full-refresh` (or `--full-refresh --select +fct_orders +fct_order_items` to scope it) to force a full rebuild. `view`/`table` models (staging, intermediate, `dim_products`) don't have this problem — they're dropped and recreated from scratch on every run regardless.
+This caused an immediate **Fan-out (row multiplication)**: a single `order_item_id` that bought `prod_001` matched both the old and new historical versions of that product, resulting in duplicate `order_item_id` rows in the intermediate layer.
+
+**Fix applied:** We enforced a strict boundary between "historical dimension" and "transactional fact":
+1. `scd_products` holds the full history for time-travel analysis.
+2. `int_order_items_with_products` was refactored to join `scd_products` with an explicit filter: `where dbt_valid_to is null`. This ensures the join only binds to the **current active state** of the product, guaranteeing a strict 1:1 match at the line-item grain.
+
+**Verification:** After applying the filter, the `unique_int_order_items_with_products_order_item_id` test passed (`PASS=4, ERROR=0`), and row counts remained perfectly flat from source to silver.
 
 ### ✅ Resolved: No Defensive Deduplication Before Merge (test coverage added)
 
@@ -133,9 +138,7 @@ returns 1 row per key.
 
 Risk: if scd_customers ever returns >1 "current" row per customer_id
 (snapshot anomaly), the join fans out → duplicate order_id → duplicate
-rows silently inserted into fct_orders (Delta MERGE only blocks
-multiple SOURCE rows hitting the same EXISTING target row — it won't
-stop duplicates within a fresh insert).
+rows silently inserted into fct_orders.
 ```
 
 **Fix applied:** added `unique` + `not_null` tests on the gold-layer surrogate keys:
@@ -163,7 +166,7 @@ models:
 
 Verified via `dbt test`: `unique_fct_orders_order_key`, `unique_fct_order_items_order_item_key`, `unique_dim_products_product_key`, plus their `not_null` counterparts, all pass. (Total project test count moved from 11 → 17 when these 6 were added, then to 16 after `stg_customers` was later removed — its 2 tests were replaced by a single `not_null` test on `scd_customers.customer_id`. Latest run: `PASS=16 WARN=0 ERROR=0`.)
 
-**Fix applied — dedup backstop added:** both fact models now include a `qualify row_number() = 1` step after their `final` CTE's `from`, so a fan-out can no longer produce duplicate rows in the first place (not just get caught by a test afterward):
+**Fix applied — dedup backstop added:** both fact models now include a `qualify row_number() = 1` step after their `final` CTE's `from`, so a fan-out can no longer produce duplicate rows in the first place:
 
 ```sql
 -- fct_orders.sql
@@ -181,40 +184,13 @@ Verified via `dbt test`: `unique_fct_orders_order_key`, `unique_fct_order_items_
     )
 ```
 
-**Why `qualify`:** equivalent to writing an extra CTE, just without the extra CTE.
+**Why `qualify`:** equivalent to writing an extra CTE, just without the extra CTE. `qualify` must come after `from` (like `having` comes after `group by`) — it filters on the window function's result, which only exists after `from` has been evaluated.
 
-```sql
--- Without qualify (2 CTEs needed):
-final as (
-    select ..., row_number() over (partition by order_id order by updated_at desc) as rn
-    from orders_enriched
-),
-deduped as (
-    select * except(rn) from final where rn = 1
-)
+**Note on partition keys:** `fct_order_items` partitions by `order_id, product_id` (not `order_item_id`), because that's what `order_item_key`'s surrogate key is actually generated from.
 
--- With qualify (1 CTE):
-final as (
-    select ...
-    from orders_enriched
-    qualify row_number() over (partition by order_id order by updated_at desc) = 1
-)
-```
+Verified via `dbt run --select fct_orders fct_order_items` (no `--full-refresh` needed): both models built successfully, `PASS=2 WARN=0 ERROR=0`.
 
-`qualify` must come after `from` (like `having` comes after `group by`) — it filters on the window function's result, which only exists after `from` has been evaluated.
-
-**Note on partition keys:** `fct_order_items` partitions by `order_id, product_id` (not `order_item_id`), because that's what `order_item_key`'s surrogate key is actually generated from — deduping on the wrong grain would let two `order_item_id`s that hash to the same `order_item_key` slip through.
-
-Verified via `dbt run --select fct_orders fct_order_items` (no `--full-refresh` needed — this only adds a filter, no schema change): both models built successfully, `PASS=2 WARN=0 ERROR=0`.
-
-**End-to-end upsert test:** to confirm the fix actually works end-to-end (not just "runs without error"), `ord_018`'s `status`/`updated_at` was edited in place and a brand-new `ord_021` row was added to `raw_orders.csv`, then re-run incrementally (`dbt seed --select raw_orders` → `dbt run --select +fct_orders`, no `--full-refresh`):
-
-| order_id | status | updated_at | confirms |
-| --- | --- | --- | --- |
-| `ord_018` | `delivered` | 2024-07-25 10:00:00 | **update** path works — this is the exact order the original `order_date` watermark bug could never re-select |
-| `ord_021` | `pending` | 2024-07-25 10:30:00 | **insert** path still works for genuinely new orders |
-
-Both landed correctly in `gold.fct_orders`, confirming the `merge_update_columns` config — present since the original version of this project but silently non-functional under the old watermark — now does what it was always meant to do.
+**End-to-end upsert test:** `ord_018`'s `status`/`updated_at` was edited in place and a brand-new `ord_021` row was added to `raw_orders.csv`, then re-run incrementally. Both landed correctly in `gold.fct_orders`, confirming the `merge_update_columns` config now does what it was always meant to do.
 
 ## 📊 Ad-hoc Analyses & Business Insights
 
@@ -222,10 +198,10 @@ To validate that the Gold-layer fact models effectively answer core e-commerce q
 
 1. **Top Products by Revenue & Units Sold** — ranks products by total revenue and units sold using line-item grain metrics (`line_total`, `quantity`) from `fct_order_items`.
 2. **Category-Level Revenue Breakdown** — aggregates `fct_order_items` by `category` to evaluate revenue contribution per product category.
-3. **Average Order Value per Month** — buckets `fct_orders` by `date_trunc('month', order_date)`, computing monthly revenue, order count, and AOV (`monthly_revenue / monthly_orders`).
-4. **Revenue by Country** — aggregates `fct_orders` by `country` to identify the highest-revenue markets.
+3. **Average Order Value per Month** — buckets `fct_orders` by `date_trunc('month', order_date)`, computing monthly revenue, order count, and AOV.
+4. **Revenue by Country** — aggregates `fct_orders` by `country`.
 5. **Top Customers by Revenue** — joins `fct_orders` to `scd_customers` (`dbt_valid_to is null`, current customer attributes only) to rank customers by total revenue and order count.
-6. **Repeat Customers** — a `having count(order_id) > 1` filter on `fct_orders` grouped by `customer_id`, joined back to `scd_customers` for contact details, to identify customers with more than one order.
+6. **Repeat Customers** — a `having count(order_id) > 1` filter on `fct_orders` grouped by `customer_id`, joined back to `scd_customers` for contact details.
 
 **BI Consumption Example:** the query behind analysis #2 (Category-Level Revenue Breakdown) was visualized as a Databricks Dashboard, confirming `fct_order_items` is directly queryable by downstream BI tools without further transformation.
 
@@ -236,13 +212,12 @@ To validate that the Gold-layer fact models effectively answer core e-commerce q
 - **Anti-Fan-Out Pre-Aggregation:** In `int_orders_enriched`, item metrics are rolled up via `GROUP BY order_id` before joining to orders. Direct joining of 1-to-many child rows to parent headers without pre-aggregation causes metric multiplication/fan-out.
 
   ```sql
-  -- ❌ Fan-out: an order with 3 items gets duplicated into 3 rows,
-  --    so summing total_amount later triple-counts it
+  -- ❌ Fan-out: an order with 3 items gets duplicated into 3 rows
   select o.order_id, o.total_amount, oi.product_id
   from orders o
   left join stg_order_items oi on o.order_id = oi.order_id
 
-  -- ✅ Pre-aggregate to order grain first, then join — one row per order
+  -- ✅ Pre-aggregate to order grain first, then join
   with order_items as (
       select order_id, sum(quantity * unit_price) as total_revenue
       from stg_order_items
@@ -253,31 +228,24 @@ To validate that the Gold-layer fact models effectively answer core e-commerce q
   left join order_items oi on o.order_id = oi.order_id
   ```
 - **Surrogate Key Determinism:** Utilizing `dbt_utils.generate_surrogate_key()` ensures cross-run consistency for surrogate primary/foreign keys.
-- **SCD Join Boundary:** Current-state customer attributes are bound via `dbt_valid_to is null` (As-Is representation). Point-in-time (As-Was) financial attribution would require valid-range temporal window joins.
-- **Watermark Limitations:** see [Resolved issue](#-resolved-order_date-could-not-serve-as-a-change-detection-watermark) above — `order_date` watermarking missed *any* status change on an order created before the current max date, not just same-day late arrivals. Fixed by switching to an `updated_at` watermark.
-- **Dedup Test Coverage:** see [Resolved issue](#-resolved-no-defensive-deduplication-before-merge-test-coverage-added) above — `unique`/`not_null` tests guard the gold-layer surrogate keys, and a `qualify row_number()` backstop in the model SQL now prevents fan-out duplicates from being written in the first place.
-- **Snapshot Source Uniqueness:** see [Resolved issue](#-resolved-snapshot-source-must-guarantee-uniqueness-no-direct-ref-on-seeds) below — SCD2 snapshots strictly require a source with guaranteed one-row-per-key. Directly snapshotting raw seeds/sources risks spurious historical versions or merge failures.
+- **SCD Join Boundary:** Current-state customer and product attributes are bound via `dbt_valid_to is null` (As-Is representation). Point-in-time (As-Was) financial attribution would require valid-range temporal window joins.
+- **Watermark Limitations:** see [Resolved issue](#-resolved-order_date-could-not-serve-as-a-change-detection-watermark) above — fixed by switching to an `updated_at` watermark.
+- **SCD2 Fan-Out Defense:** see [Resolved issue](#-resolved-scd2-product-dimension-caused-fan-out-in-line-item-fact-models) above — prevented by filtering `dbt_valid_to is null` in the fact/intermediate joins.
+- **Dedup Test Coverage:** see [Resolved issue](#-resolved-no-defensive-deduplication-before-merge-test-coverage-added) above — `unique`/`not_null` tests guard the gold-layer surrogate keys.
+- **Snapshot Source Uniqueness:** see [Resolved issue](#-resolved-snapshot-source-must-guarantee-uniqueness-no-direct-ref-on-seeds) below — SCD2 snapshots strictly require a source with guaranteed one-row-per-key.
 
 ### ✅ Resolved: Snapshot Source Must Guarantee Uniqueness (No Direct `ref` on Seeds)
 
-**The problem (common tutorial anti-pattern):** The original reference tutorial (and many others) points the `dbt snapshot` directly at the raw seed/source table (e.g., `ref('raw_customers')`) and applies cleaning logic (`trim`, `lower`) inside the snapshot query.
+**The problem (common tutorial anti-pattern):** The original reference tutorial points the `dbt snapshot` directly at the raw seed/source table and applies cleaning logic inside the snapshot query.
 
 **Why this is dangerous:**
-1. **No Uniqueness Guarantee:** Seed or raw source tables do not guarantee that the `unique_key` is actually unique. If the CSV contains duplicate `customer_id`s, dbt's `strategy='check'` will either silently generate spurious historical versions (polluting the SCD2 history) or fail with a `Multiple source rows matched` error.
-2. **False Positives from Uncleaned Data:** If cleaning logic is inside the snapshot, any minor upstream drift (e.g., `" John"` vs `"John"`) will be detected as a "business change," creating meaningless history rows.
+1. **No Uniqueness Guarantee:** Seed or raw source tables do not guarantee that the `unique_key` is actually unique. If the CSV contains duplicate `customer_id`s, dbt's `strategy='check'` will either silently generate spurious historical versions or fail.
+2. **False Positives:** Any minor upstream drift (e.g., `" John"` vs `"John"`) will be detected as a "business change," creating meaningless history rows.
 3. **Conflating Responsibilities:** Snapshotting should *only* track changes. Data cleansing and deduplication are separate concerns that belong to the staging layer.
 
-**Fix applied:**
-We enforce a strict boundary. `scd_customers` reads *only* from `stg_customers`, which acts as a "cleansing gate":
-1. **Cleanse & Cast:** Applied `trim()`, `lower()`, `upper()` and type casting in `stg_customers`.
-2. **Deduplicate:** Applied `qualify row_number() over (partition by customer_id order by updated_at desc) = 1` in the staging model to guarantee one row per key.
-3. **Snapshot:** The snapshot simply selects from this guaranteed-unique, clean view without any internal transformation.
+**Fix applied:** We enforce a strict boundary. Snapshots read *only* from cleaned staging models (e.g., `stg_customers`, `stg_products`), which act as a "cleansing gate" (casting, trimming, and deduplicating via `row_number()`).
 
-**Verification:**
-We intentionally injected a duplicate `customer_id` and a row with extra whitespace into the raw seed. After running `dbt run` and `dbt snapshot`:
-- The duplicate was filtered out by `stg_customers`.
-- The whitespace difference was normalized and did *not* create a new SCD2 version.
-- The snapshot table remained clean and stable.
+**Verification:** We intentionally injected a duplicate `customer_id` and a row with extra whitespace into the raw seed. After running `dbt run` and `dbt snapshot`, the duplicate was filtered out and the whitespace difference was normalized, leaving the snapshot clean.
 
 ## 🔍 Data Quality & Troubleshooting Case Study: Validating Grain & Source Consistency
 
@@ -285,7 +253,7 @@ During the development of the Gold-layer fact models (`fct_order_items` and `fct
 
 ### 1. The Investigation
 
-When comparing header-level totals with line-item aggregates, a discrepancy was identified in `ord_007` (where the header `total_amount` did not match the sum of its items). To isolate and verify the issue at the line-item grain, the following verification query was executed against the Gold layer:
+When comparing header-level totals with line-item aggregates, a discrepancy was identified in `ord_007` (where the header `total_amount` did not match the sum of its items). 
 
 ```sql
 -- Check all line items for ord_007 to verify item-level calculations
@@ -301,9 +269,9 @@ where order_id = 'ord_007';
 
 ### 2. Root Cause Analysis
 
-- **Verification Result**: The line items correctly summed up to the accurate total (e.g., matching the multi-row product breakdown), confirming that the dbt transformation, join logic, and aggregation calculations were entirely correct.
-- **Source Anomaly**: The mismatch originated from an upstream mock-data inconsistency in raw_orders.csv, where the header-level amount was mismatched with the actual item details.
-- **Takeaway**: This highlights the critical importance of multi-layer data modeling, clear metric isolation (using line_total at the line-item grain), and implementing robust dbt generic/singular tests to catch upstream data drift early.
+- **Verification Result**: The line items correctly summed up to the accurate total, confirming that the dbt transformation, join logic, and aggregation calculations were entirely correct.
+- **Source Anomaly**: The mismatch originated from an upstream mock-data inconsistency in `raw_orders.csv`, where the header-level amount was mismatched with the actual item details.
+- **Takeaway**: This highlights the critical importance of multi-layer data modeling, clear metric isolation (using `line_total` at the line-item grain), and implementing robust dbt generic/singular tests to catch upstream data drift early.
 
 ## 🚀 Quickstart
 
@@ -348,13 +316,13 @@ job_ready_dbt:
       token: "Your_TOKEN"
 ```
 
-> ⚠️ **Do not commit your real token.** Replace `"Your_TOKEN"` with your own Databricks personal access token (User Settings → Developer → Access tokens) locally, but never push the real value to git — keep this file out of version control (e.g. via `.gitignore`) or reset `token` back to `"Your_TOKEN"` before committing.
+> ⚠️ **Do not commit your real token.** Replace `"Your_TOKEN"` with your own Databricks personal access token locally, but never push the real value to git.
 
 **Run against a specific environment:**
 
 ```bash
-dbt build --target dev    # seed + run + test against the dev catalog
-dbt build --target prod   # same, against the prod catalog
+dbt build --target dev
+dbt build --target prod
 ```
 
 ## Reference
