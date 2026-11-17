@@ -433,7 +433,7 @@ job_ready_dbt:
   outputs:
     dev:
       type: databricks
-      catalog: job_ready_dbt
+      catalog: dbt_job_ready
       schema: default
       host: <your-workspace>.cloud.databricks.com
       http_path: /sql/1.0/warehouses/<your-warehouse-id>
@@ -441,7 +441,7 @@ job_ready_dbt:
       token: "Your_TOKEN"
     prod:
       type: databricks
-      catalog: job_ready_dbt_prod
+      catalog: dbt_job_ready_prod
       schema: default
       host: <your-workspace>.cloud.databricks.com
       http_path: /sql/1.0/warehouses/<your-warehouse-id>
