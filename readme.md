@@ -91,19 +91,35 @@ job_ready_dbt/
 
 **Models:**
 
-- `dim_products`: Dimension table built on top of the SCD2 snapshot (`scd_products`). It filters for the current active state (`dbt_valid_to is null`) to serve as a Type 1 (current state) view for BI analysts, while the full history is preserved in the snapshot layer.
+- `dim_products`: Historical product dimension built from `scd_products`, preserving SCD Type 2 versions with `dbt_valid_from` and `dbt_valid_to`. Each historical version is identified by a surrogate key generated from `product_id` and `dbt_valid_from`.
 - `fct_order_items`: Incremental fact table tracking line-item transactional performance.
 - `fct_orders`: Incremental fact table tracking order-level metrics, enriched customer profiles, and aggregate revenue.
 
 ## ⚡ Incremental Strategy & Watermarking
 
-Both fact models (`fct_orders`, `fct_order_items`) use incremental materialization with `merge` strategy, filtering on `updated_at`:
+Both fact models (`fct_orders`, `fct_order_items`) use incremental materialization with a `merge` strategy. Each model applies a watermark based on its primary source entity's update timestamp.
+
+**`fct_orders` — Order-level watermark:**
 
 ```sql
 {% if is_incremental() %}
-    where updated_at > (select max(updated_at) from {{ this }})
+    where updated_at > (
+        select max(updated_at) from {{ this }}
+    )
 {% endif %}
 ```
+
+**`fct_order_items` — Order-item-level watermark:**
+
+```sql
+{% if is_incremental() %}
+    where order_item_updated_at > (
+        select max(order_item_updated_at) from {{ this }}
+    )
+{% endif %}
+```
+
+**Limitation:** These watermarks detect changes to their respective source entities. Changes in joined or aggregated upstream tables may not trigger an incremental update unless the relevant source timestamps are incorporated into the change-detection logic.
 
 - **Unique Keys:** `order_key` (`fct_orders`), `order_item_key` (`fct_order_items`).
 - **Merge Update Governance:** Explicitly targets mutating attributes (`merge_update_columns`) to prevent historical data corruption while allowing operational state transitions (status, revenue recalibrations).
@@ -187,7 +203,7 @@ models:
 
 **Why `qualify`:** equivalent to writing an extra CTE, just without the extra CTE. `qualify` must come after `from` (like `having` comes after `group by`) — it filters on the window function's result, which only exists after `from` has been evaluated.
 
-**Note on partition keys:** `fct_order_items` partitions by `order_id, product_id` (not `order_item_id`), because that's what `order_item_key`'s surrogate key is actually generated from.
+**Note on partition keys:** `fct_orders` deduplicates by `order_id`, while `fct_order_items` deduplicates by `order_item_id`. Both partition keys align with their respective fact-table grains and surrogate key generation logic, ensuring at most one row per business key within each processed batch.
 
 Verified via `dbt run --select fct_orders fct_order_items` (no `--full-refresh` needed): both models built successfully, `PASS=2 WARN=0 ERROR=0`.
 
