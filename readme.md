@@ -181,7 +181,7 @@ models:
     final as (
         select ...
         from order_items
-        qualify row_number() over (order_item_id order by order_item_updated_at desc) = 1
+        qualify row_number() over (partition by order_item_id order by order_item_updated_at desc) = 1
     )
 ```
 
