@@ -6,7 +6,7 @@ An industry-standard, analytics-engineering-grade dbt modeling project for an e-
 
 ```
 Seeds / Sources
-├── raw_customers      ──► scd_customers (Snapshot, Type 2 SCD)
+├── raw_customers      ──► stg_customers ──► scd_customers (Snapshot, Type 2 SCD)
 ├── raw_products       ──► stg_products  ──► scd_products (Snapshot, Type 2 SCD)
 ├── raw_orders         ──► stg_orders
 └── raw_order_items    ──► stg_order_items
@@ -72,7 +72,7 @@ job_ready_dbt/
 - `stg_order_items`: Structural passthrough with clean schema. Includes `created_at` / `updated_at`.
 - `stg_products`: Normalizes product names and categories. Includes `created_at` / `updated_at`.
 
-**No `stg_customers`, by design:** customer cleaning logic (`trim`/`lower`/`upper` on name, email, country) lives only in `scd_customers` (the snapshot). An earlier version of this project had both `stg_customers` and `scd_customers` reading directly from `raw_customers` with the exact same cleaning logic duplicated in two places — and `stg_customers` was never actually referenced by anything downstream. It was removed to eliminate the duplication; the tests were moved to `scd_customers` instead.
+**`stg_customers` — Dedicated Customer Staging Model:** Customer data is cleaned and standardized in `stg_customers` using `trim()`, `lower()`, and `upper()` for names, emails, and country fields. The `scd_customers` snapshot references this staging model to track historical changes (SCD Type 2). This separation keeps data cleansing in the staging layer and change tracking in the snapshot layer, avoiding duplicated transformation logic.
 
 ### 2. Intermediate Layer (`models/silver/`)
 
@@ -181,7 +181,7 @@ models:
     final as (
         select ...
         from order_items
-        qualify row_number() over (partition by order_id, product_id order by updated_at desc) = 1
+        qualify row_number() over (order_item_id order by order_item_updated_at desc) = 1
     )
 ```
 
