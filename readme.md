@@ -137,14 +137,19 @@ Both fact models (`fct_orders`, `fct_order_items`) use incremental materializati
 
 ### ✅ Resolved: SCD2 Product Dimension Caused Fan-out in Line-Item Fact Models
 
-**The problem (discovered during implementation):** 
-When implementing SCD2 for `products` by adding `created_at` and `updated_at` to the seed data, the `scd_products` snapshot correctly generated multiple historical versions per `product_id`. However, the `int_order_items_with_products` model was initially joining `stg_products` without deduplication. 
+**The problem (discovered during implementation):**
 
-This caused an immediate **Fan-out (row multiplication)**: a single `order_item_id` that bought `prod_001` matched both the old and new historical versions of that product, resulting in duplicate `order_item_id` rows in the intermediate layer.
+Initially, `int_order_items_with_products` joined directly to `stg_products`, which contained duplicate `product_id` records and caused row multiplication (fan-out).
 
-**Fix applied:** We enforced a strict boundary between "historical dimension" and "transactional fact":
-1. `scd_products` holds the full history for time-travel analysis.
-2. `int_order_items_with_products` was refactored to join `scd_products` with an explicit filter: `where dbt_valid_to is null`. This ensures the join only binds to the **current active state** of the product, guaranteeing a strict 1:1 match at the line-item grain.
+I then switched the join to `scd_products`, but the duplication persisted because the SCD Type 2 snapshot contained multiple historical versions for the same `product_id`.
+
+**Fix applied:** I added `WHERE dbt_valid_to IS NULL` to the `scd_products` join, ensuring that each order item matches only the current active product version.
+
+Additionally, I introduced `ROW_NUMBER()` deduplication in `stg_products` to guarantee one row per `product_id` before snapshot processing.
+
+This separates two responsibilities:
+- **Staging:** Cleans and deduplicates source records.
+- **Snapshot:** Preserves historical product changes, while downstream joins select only the active version.
 
 **Verification:** After applying the filter, the `unique_int_order_items_with_products_order_item_id` test passed (`PASS=4, ERROR=0`), and row counts remained perfectly flat from source to silver.
 
@@ -427,7 +432,7 @@ dbt test --select gold
 
 ### 2. Understanding the `+` Operator
 - **`model+` (Downstream)**: Selects the model **and everything that depends on it**. 
-  *(e.g., `dbt run --select int_orders_enriched+` runs `int_orders_enriched`, `fct_orders`, and `fct_order_items`)*
+  *(e.g., `dbt run --select int_orders_enriched+` runs `int_orders_enriched` and `fct_orders`.)*
 - **`+model` (Upstream)**: Selects the model **and everything it depends on**. 
   *(e.g., `dbt run --select +fct_orders` runs all staging and intermediate models needed for `fct_orders`; snapshots are not executed by `dbt run`, so use `dbt build --select +fct_orders` or run `dbt snapshot` first)*
 - **`+model+` (Both)**: Traverses both upstream and downstream dependencies.
