@@ -27,7 +27,7 @@ To balance execution agility, cloud storage costs, and query performance, the pr
 
 - **Staging (`models/bronze/`)**: `+materialized: view` — Lightweight, zero-storage transformations that always pull the latest raw seed/source data on-the-fly.
 - **Intermediate (`models/silver/`)**: `+materialized: view` — Encapsulates complex joins and pre-aggregations as views to avoid redundant physical storage while keeping business logic modular.
-- **Marts (`models/gold/`)**: `+materialized: table` — Heavy analytics-ready tables optimized for BI consumption. Fact models (`fct_orders`, `fct_order_items`) specifically leverage an **incremental** strategy with `merge` to process only new or updated partitions efficiently.
+- **Marts (`models/gold/`)**: `+materialized: table` — Heavy analytics-ready tables optimized for BI consumption. Fact models (`fct_orders`, `fct_order_items`) specifically leverage an **incremental** strategy with `merge` to process only new or updated rows (based on an `updated_at` watermark) efficiently.
 
 ## 📁 Project Structure
 
@@ -38,6 +38,7 @@ job_ready_dbt/
 ├── models/
 │   ├── bronze/
 │   │   ├── _bronze_models.yml
+│   │   ├── stg_customers.sql
 │   │   ├── stg_orders.sql
 │   │   ├── stg_order_items.sql
 │   │   └── stg_products.sql
@@ -52,6 +53,8 @@ job_ready_dbt/
 ├── snapshots/
 │   ├── scd_customers.sql
 │   └── scd_products.sql
+├── tests/
+│   └── assert_header_matches_items.sql
 ├── seeds/
 │   ├── raw_customers.csv
 │   ├── raw_orders.csv
@@ -68,11 +71,11 @@ job_ready_dbt/
 
 **Models:**
 
-- `stg_orders`: Casts `order_date` to `DATE`. Includes `created_at` / `updated_at`.
-- `stg_order_items`: Structural passthrough with clean schema. Includes `created_at` / `updated_at`.
-- `stg_products`: Normalizes product names and categories. Includes `created_at` / `updated_at`.
+- `stg_orders`: Casts `order_date` to `DATE` and `created_at` / `updated_at` to `TIMESTAMP`.
+- `stg_order_items`: Structural passthrough; casts `created_at` / `updated_at` to `TIMESTAMP`.
+- `stg_products`: Trims product names and categories, casts `price` to `DECIMAL(10,2)` and the timestamps, and deduplicates to one row per `product_id` (latest `updated_at`) with `qualify row_number()`.
 
-**`stg_customers` — Dedicated Customer Staging Model:** Customer data is cleaned and standardized in `stg_customers` using `trim()`, `lower()`, and `upper()` for names, emails, and country fields. The `scd_customers` snapshot references this staging model to track historical changes (SCD Type 2). This separation keeps data cleansing in the staging layer and change tracking in the snapshot layer, avoiding duplicated transformation logic.
+**`stg_customers` — Dedicated Customer Staging Model:** Customer data is cleaned and standardized in `stg_customers` using `trim()`, `lower()`, and `upper()` for names, emails, and country fields, and deduplicated to one row per `customer_id` (latest `created_at`) with `row_number()`. The `scd_customers` snapshot references this staging model to track historical changes (SCD Type 2). This separation keeps data cleansing in the staging layer and change tracking in the snapshot layer, avoiding duplicated transformation logic.
 
 ### 2. Intermediate Layer (`models/silver/`)
 
@@ -91,7 +94,7 @@ job_ready_dbt/
 
 **Models:**
 
-- `dim_products`: Historical product dimension built from `scd_products`, preserving SCD Type 2 versions with `dbt_valid_from` and `dbt_valid_to`. Each historical version is identified by a surrogate key generated from `product_id` and `dbt_valid_from`.
+- `dim_products`: Current-state product dimension built from `scd_products` filtered with `dbt_valid_to is null`, so there is exactly one row per `product_id` (the full SCD Type 2 history stays in the `scd_products` snapshot). The surrogate key `product_key` is generated from `product_id` alone and is the same expression used for `fct_order_items.product_key`, so the fact-to-dimension join is 1:1. `dbt_valid_from` / `dbt_valid_to` are kept as audit columns (`dbt_valid_to` is always null in this table).
 - `fct_order_items`: Incremental fact table tracking line-item transactional performance.
 - `fct_orders`: Incremental fact table tracking order-level metrics, enriched customer profiles, and aggregate revenue.
 
@@ -119,10 +122,10 @@ Both fact models (`fct_orders`, `fct_order_items`) use incremental materializati
 {% endif %}
 ```
 
-**Limitation:** These watermarks detect changes to their respective source entities. Changes in joined or aggregated upstream tables may not trigger an incremental update unless the relevant source timestamps are incorporated into the change-detection logic.
+**Limitation:** These watermarks detect changes to their respective source entities. Changes in joined or aggregated upstream tables may not trigger an incremental update unless the relevant source timestamps are incorporated into the change-detection logic. The filter is also a strict `>`, so a late-arriving row whose `updated_at` equals the current maximum would be skipped; `>=` combined with the `qualify` dedup would close that gap.
 
 - **Unique Keys:** `order_key` (`fct_orders`), `order_item_key` (`fct_order_items`).
-- **Merge Update Governance:** Explicitly targets mutating attributes (`merge_update_columns`) to prevent historical data corruption while allowing operational state transitions (status, revenue recalibrations).
+- **Merge Update Governance:** `merge_update_columns` restricts each merge to a whitelist of mutable columns. `fct_orders` updates `status`, `line_items`, `total_quantity`, `line_total_amount`, `country` and `updated_at`; `fct_order_items` updates `quantity`, `unit_price`, `line_total` and `order_item_updated_at`. Columns not on the list (for example `total_amount`, the customer name/email, and the denormalized order columns in `fct_order_items`) are written when a row is first inserted but are not changed by later merges; refreshing them requires `--full-refresh`.
 
 ### ✅ Resolved: `order_date` Could Not Serve as a Change-Detection Watermark
 
@@ -244,7 +247,7 @@ JOIN workspace.gold.scd_customers c ON o.customer_id = c.customer_id;
 ```
 
 **My Approach (OBT Architecture):**
-Because I denormalized the active customer attributes into `fct_orders` during the Silver layer transformation (`dbt_valid_to IS NULL` filter), the Gold fact table acts as an **OBT (One Big Table)**. The query becomes a single-table aggregation with zero joins.
+Because I denormalized the active customer attributes into `fct_orders` during the Silver layer transformation (`dbt_valid_to IS NULL` filter), the Gold fact table acts as a wide, denormalized table (OBT-style). The query becomes a single-table aggregation with zero joins.
 
 ```sql
 -- My Approach: Single-table scan, zero joins
@@ -262,7 +265,9 @@ select * from repeat_customers;
 ```
 
 **Key Takeaway (The "Why"):**
-By moving the `LEFT JOIN` upstream into the Silver layer and materializing a wide fact table, I eliminate the need for downstream BI queries to perform expensive joins on massive fact tables. This drastically improves **query performance**, reduces **compute costs (cluster hours)**, and simplifies the SQL for analysts.
+By moving the `LEFT JOIN` upstream into the Silver layer and materializing a wide fact table, downstream queries no longer need the join, and the SQL for analysts is simpler. This should reduce query work on large tables; I did not benchmark it on this small dataset.
+
+**Trade-off:** the customer attributes in `fct_orders` are copied at load time. `first_name`, `last_name` and `email` are not in `merge_update_columns`, and the watermark only watches `orders.updated_at`, so a later change to a customer shows up in existing order rows only after a `--full-refresh` (newly loaded orders pick up the current values).
 
 **Proof of the SCD2 Fan-out Bug in the Tutorial:**
 *The screenshot below shows the actual execution result from the tutorial's own code. Notice the highlighted rows (red arrows): `cust_001` (Alice Johnson) is returned **twice**, each showing 4 orders.*
@@ -271,7 +276,7 @@ By moving the `LEFT JOIN` upstream into the Silver layer and materializing a wid
 
 This is a classic **SCD2 fan-out**. Because the tutorial's query performed an unconditional `JOIN` to `scd_customers` without filtering for the active record (`dbt_valid_to IS NULL`), Alice's two historical versions duplicated her row in the final aggregation. In a real business scenario, this would cause Alice's order count to be artificially inflated to 8, leading to completely wrong business decisions.
 
-**My OBT Architecture is Naturally Immune (Result Proof):**
+**My Architecture Avoids This Fan-out (Result Proof):**
 *The screenshot below shows the result of my single-table query against the OBT architecture.* 
 
 ![OBT Single Table Result](job_ready_dbt/asset/obt_single_table_result.png)
@@ -346,7 +351,7 @@ where order_id = 'ord_007';
 
 ### 3. Automated Data Quality Assertion (Implemented)
 
-To prevent this exact issue from slipping through silently in a production environment, I implemented a **Singular Test** (`tests/assert_header_matches_items.sql`). This test performs a cross-grain reconciliation at the Silver layer (where both metrics coexist on the same row) to catch upstream dirty data before it pollutes the Gold layer.
+To prevent this exact issue from slipping through silently in a production environment, I implemented a **Singular Test** (`tests/assert_header_matches_items.sql`). This test performs a cross-grain reconciliation at the Silver layer (where both metrics coexist on the same row) to flag upstream dirty data. Because it is configured as `severity = 'warn'` and runs as a `dbt test` step after the models are built (see Orchestration), it flags the problem rather than blocking it from reaching Gold; running `dbt build` with an `error`-severity test would let dbt skip the downstream models instead.
 
 ```sql
 {{ config(severity = 'warn') }}
@@ -368,7 +373,7 @@ Got 1 result, configured to warn if != 0
 ```
 
 **Key Takeaway on Incremental Models:** 
-During verification, the Gold-layer incremental model (`fct_orders`) initially masked this bug because the `updated_at` watermark didn't trigger a merge. Forcing a `dbt run --full-refresh` was required to propagate the corrected source data. This validates the architectural choice of placing the data-quality test at the **Silver layer** (before incremental materialization) to guarantee accurate downstream reporting.
+During verification, the Gold-layer incremental model (`fct_orders`) initially masked this bug because the `updated_at` watermark didn't trigger a merge. Forcing a `dbt run --full-refresh` was required to propagate the corrected source data. This is why the data-quality test sits at the **Silver layer**: it reads the `int_orders_enriched` view directly (not the incremental table), so it sees the current source data even when the incremental Gold table has not been refreshed.
 
 **The True Value of Singular Tests (Business Logic Validation):**
 Generic tests (`unique`, `not_null`) only guarantee *structural integrity* (e.g., no duplicate primary keys). They do not catch business logic errors. This Singular Test highlights the shift from "code that runs" to "data that can be trusted." By codifying the business rule (`header_amount == calculated_line_item_amount`), we transform a one-off ad-hoc query into a permanent, automated data quality gate.
@@ -384,16 +389,24 @@ dbt debug
 # 2. Load seed data into the warehouse
 dbt seed
 
-# 3. Run the full transformation pipeline (Bronze -> Silver -> Gold)
-dbt run
+# 3. Build the staging views first (the snapshots read from them)
+dbt run --select bronze
 
-# 4. Execute automated data quality tests
+# 4. Build the SCD2 snapshots (`dbt run` does not execute snapshots)
+dbt snapshot
+
+# 5. Build Silver and Gold (they read from the snapshots)
+dbt run --select silver gold
+
+# 6. Execute automated data quality tests
 dbt test
 
-# 5. Generate and serve lineage documentation
+# 7. Generate and serve lineage documentation
 dbt docs generate
 dbt docs serve
 ```
+
+Shortcut: `dbt build` runs seeds, snapshots, models and tests together in DAG order.
 
 ## 🛠️ Developer Cheatsheet (Node Selection)
 
@@ -416,7 +429,7 @@ dbt test --select gold
 - **`model+` (Downstream)**: Selects the model **and everything that depends on it**. 
   *(e.g., `dbt run --select int_orders_enriched+` runs `int_orders_enriched`, `fct_orders`, and `fct_order_items`)*
 - **`+model` (Upstream)**: Selects the model **and everything it depends on**. 
-  *(e.g., `dbt run --select +fct_orders` runs all staging models, snapshots, and intermediate models needed for `fct_orders`)*
+  *(e.g., `dbt run --select +fct_orders` runs all staging and intermediate models needed for `fct_orders`; snapshots are not executed by `dbt run`, so use `dbt build --select +fct_orders` or run `dbt snapshot` first)*
 - **`+model+` (Both)**: Traverses both upstream and downstream dependencies.
 
 ### 3. Common Production Workflows
@@ -454,7 +467,7 @@ job_ready_dbt:
       host: <your-workspace>.cloud.databricks.com
       http_path: /sql/1.0/warehouses/<your-warehouse-id>
       threads: 4
-      token: "Your_TOKEN"
+      token: "{{ env_var('DATABRICKS_TOKEN') }}"
     prod:
       type: databricks
       catalog: dbt_job_ready_prod
@@ -462,10 +475,10 @@ job_ready_dbt:
       host: <your-workspace>.cloud.databricks.com
       http_path: /sql/1.0/warehouses/<your-warehouse-id>
       threads: 4
-      token: "Your_TOKEN"
+      token: "{{ env_var('DATABRICKS_TOKEN') }}"
 ```
 
-> ⚠️ **Do not commit your real token.** Replace `"Your_TOKEN"` with your own Databricks personal access token locally, but never push the real value to git.
+> ⚠️ **Do not commit a real token.** The profile reads the token from the `DATABRICKS_TOKEN` environment variable (set it in your shell or in a git-ignored `.env` file), so no secret is stored in the file.
 
 **Run against a specific environment:**
 
@@ -485,7 +498,7 @@ To prevent the classic "stale SCD2" bug (where downstream models read yesterday'
 
 **Key Characteristics:**
 *   **Idempotency:** Re-running the job without source data changes results in zero new rows in the fact tables or snapshots.
-*   **Data Quality Gate:** The final `dbt test` step serves as a hard gate. As seen in the execution log, the Singular Test successfully caught the `$80` source anomaly and logged it as a `WARN` without halting the entire pipeline.
+*   **Data Quality Check:** The final `dbt test` step reports failures. As seen in the execution log, the singular test caught the `$80` source anomaly and logged it as a `WARN` without failing the job. Because the tests run after the models are built, they flag bad data rather than prevent it from reaching Gold.
 
 #### 🚀 Environment Execution Guide
 
