@@ -614,6 +614,8 @@ When orchestrating this pipeline within a Databricks Workflow, Databricks dynami
 5. dbt test
 ```
 
+> **Note on editing seeds for incremental-load tests:** The Databricks Job runs the dbt project from the Databricks Git folder (`job-ready-dbt`), not from my local VS Code copy. A seed change (for example, adding rows to `raw_orders.csv`) only takes effect after it reaches that folder. Keep Git as the single source of truth: after editing locally, commit and push, then **Pull** in the Databricks Git folder before running the Job. If I edit in the Databricks folder instead, I commit and push from there and pull locally before editing again. Editing the same file in both places causes conflicts and failed runs.
+
 **Option 2: Running Locally via CLI (Target-based Routing)**
 When executing from a local terminal, environment switching is managed by the `--target` flag referencing the `profiles.yml`. To deploy or test against the production catalog locally, append `--target prod` to every command:
 ```bash
