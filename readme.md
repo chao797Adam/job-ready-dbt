@@ -408,7 +408,7 @@ select * from cte
 
 **Why this is dangerous:**
 1. **No Uniqueness Guarantee:** Seed or raw source tables do not guarantee that the `unique_key` is actually unique. If the CSV contains duplicate `customer_id`s, dbt's `strategy='check'` will either silently generate spurious historical versions or fail.
-2. **False Positives:** Any minor upstream drift (e.g., `" John"` vs `"John"`) will be detected as a "business change," creating meaningless history rows.
+2. **Cleaning Must Happen Before the Comparison:** Without normalisation, whitespace or case drift (e.g., `" John"` vs `"John"`) would be recorded as a "business change" and create meaningless history rows. Here `stg_customers` trims and normalises first, and the snapshot reads that cleaned model. The tutorial also normalises, but inside the snapshot query, so the cleaned data is not reusable by other models.
 3. **Conflating Responsibilities:** Snapshotting should *only* track changes. Data cleansing and deduplication are separate concerns that belong to the staging layer.
 
 **Fix applied:** We enforce a strict boundary. Snapshots read *only* from cleaned staging models (e.g., `stg_customers`, `stg_products`), which act as a "cleansing gate" (casting, trimming, and deduplicating via `row_number()`).
