@@ -259,8 +259,8 @@ order by total_revenue desc;
 select
     date_trunc('month', order_date) as order_month,
     count(order_id) as order_count,
-    sum(total_amount) as total_revenue,
-    round(sum(total_amount) / count(order_id), 2) as avg_order_value
+    sum(line_total_amount) as total_revenue,
+    round(sum(line_total_amount) / count(order_id), 2) as avg_order_value
 from dbt_job_ready.gold.fct_orders
 group by date_trunc('month', order_date)
 order by order_month;
@@ -270,7 +270,7 @@ order by order_month;
 ```sql
 select
     country,
-    sum(total_amount) as total_revenue,
+    sum(line_total_amount) as total_revenue,
     count(order_id) as order_count
 from dbt_job_ready.gold.fct_orders
 group by country
@@ -290,7 +290,7 @@ select
     c.last_name,
     c.email,
     c.country,
-    sum(f.total_amount) as total_revenue,
+    sum(f.line_total_amount) as total_revenue,
     count(distinct f.order_id) as order_count
 from dbt_job_ready.gold.fct_orders f
 inner join current_customers c 
