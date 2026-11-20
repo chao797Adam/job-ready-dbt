@@ -352,7 +352,7 @@ where order_id = 'ord_007';
 
 - **The Original Anomaly**: In the original source data (`raw_orders.csv`), `ord_007`'s header `total_amount` was recorded as **`312.50`**.
 - **The Cross-Grain Verification**: However, when we aggregated its actual line items from `fct_order_items` (`2 * 49.99 + 2 * 84.03 + 1 * 124.50`), the true total was **`392.54`**. There was an $80 discrepancy in the source system!
-- **Takeaway**: If the pipeline blindly trusted the upstream header `total_amount`, this error would have silently polluted downstream financial reports. Because I built the pipeline with strict **metric isolation** (maintaining both Order-grain and Line-Item-grain fact tables), I was able to perform this cross-grain reconciliation and catch the dirty data that the original tutorial completely missed.
+- **Takeaway**: If the pipeline blindly trusted the upstream header `total_amount`, this error would have silently polluted downstream financial reports. Because I built the pipeline with strict **metric isolation** (maintaining both Order-grain and Line-Item-grain fact tables), I was able to perform this cross-grain reconciliation and catch the dirty data that a check the tutorial does not include.
 
 ### 3. Automated Data Quality Assertion (Implemented)
 
@@ -369,6 +369,10 @@ select
 from {{ ref('int_orders_enriched') }}
 where abs(total_amount - line_total_amount) > 0.01
 ```
+
+The query result below shows the single order the test flags: the header says 312.50, but its line items add up to 392.54.
+
+![Test preview: ord_007 header vs line items](job_ready_dbt/asset/test_preview.png)
 
 Because upstream data quality is unpredictable, the test is configured with `severity = 'warn'`. Running `dbt test --select assert_header_matches_items` successfully intercepts `ord_007` without halting the entire pipeline:
 
