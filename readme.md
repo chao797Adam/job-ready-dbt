@@ -404,7 +404,7 @@ select * from cte
 
 ### Snapshots Read From Staging, Not Directly From the Seed
 
-**Design choice:** The reference tutorial points `dbt snapshot` directly at the raw seed table (`ref('raw_customers')`) and applies `trim`/`lower`/`upper` inside the snapshot query. That works in the video because the demo seed is cut down to a single row, so duplicates cannot occur. For this project I added a staging layer in between, because a snapshot cannot protect itself from a source that is not guaranteed to be clean or unique.
+**Design choice:** The reference tutorial has staging models for orders, order items and products, but none for customers: its `scd_customers` snapshot points directly at the raw seed (`ref('raw_customers')`) and applies `trim`/`lower`/`upper` inside the snapshot query. That works in the video because the demo seed is cut down to a single row, so duplicates cannot occur. For this project I added a staging layer in between, because a snapshot cannot protect itself from a source that is not guaranteed to be clean or unique.
 
 **What the staging layer protects against:**
 1. **No uniqueness guarantee:** A seed or raw table does not guarantee that the `unique_key` is actually unique. If the CSV contained duplicate `customer_id`s, dbt's `strategy='check'` could silently generate spurious historical versions or fail.
