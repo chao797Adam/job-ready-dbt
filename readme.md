@@ -219,6 +219,14 @@ Verified via `dbt run --select fct_orders fct_order_items` (no `--full-refresh` 
 
 ## 📊 Ad-hoc Analyses & Business Insights
 
+**Revenue Metric & Data Quality Note:**
+
+During data quality validation, order `ord_007` was found to have a discrepancy between its source header `total_amount` (312.50) and the calculated line-item total (392.54).
+
+To avoid using this known inconsistent header amount in revenue reporting, the analyses below use `fct_orders.line_total_amount` for order-level revenue and `fct_order_items.line_total` for product-level and category-level revenue.
+
+The original `total_amount` is retained for source reconciliation and data quality auditing rather than used as the primary revenue metric.
+
 To validate that the Gold-layer fact models effectively answer core e-commerce questions, verification and ad-hoc analysis queries are maintained under `analyses/`:
 
 1. **Top Products by Revenue & Units Sold** — ranks products by total revenue and units sold using line-item grain metrics (`line_total`, `quantity`) from `fct_order_items`.
