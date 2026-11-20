@@ -444,7 +444,7 @@ where order_id = 'ord_007';
 
 - **The Original Anomaly**: In the original source data (`raw_orders.csv`), `ord_007`'s header `total_amount` was recorded as **`312.50`**.
 - **The Cross-Grain Verification**: However, when we aggregated its actual line items from `fct_order_items` (`2 * 49.99 + 2 * 84.03 + 1 * 124.50`), the true total was **`392.54`**. There was an $80 discrepancy in the source system!
-- **Takeaway**: If the pipeline blindly trusted the upstream header `total_amount`, this error would have silently polluted downstream financial reports. Because I built the pipeline with strict **metric isolation** (maintaining both Order-grain and Line-Item-grain fact tables), I was able to perform this cross-grain reconciliation and catch the dirty data that a check the tutorial does not include.
+- **Takeaway**: If the pipeline blindly trusted the upstream header `total_amount`, this error would have silently polluted downstream financial reports. Because I built the pipeline with strict **metric isolation** (maintaining both Order-grain and Line-Item-grain fact tables), I was able to perform this cross-grain reconciliation and catch dirty data through a check the tutorial does not include.
 
 ### 3. Automated Data Quality Assertion (Implemented)
 
@@ -457,7 +457,7 @@ select
     order_id,
     total_amount as header_amount,
     line_total_amount as calculated_amount,
-    (total_amount - line_total_amount) as difference
+    round(total_amount - line_total_amount, 2) as difference
 from {{ ref('int_orders_enriched') }}
 where abs(total_amount - line_total_amount) > 0.01
 ```
