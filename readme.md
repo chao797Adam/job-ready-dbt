@@ -372,7 +372,7 @@ where abs(total_amount - line_total_amount) > 0.01
 
 The query result below shows the single order the test flags: the header says 312.50, but its line items add up to 392.54.
 
-![Test preview: ord_007 header vs line items](job_ready_dbt/asset/test_preview.png)
+![Test preview: ord_007 header vs line items](job_ready_dbt/asset/ord_007_test_preview.png)
 
 Because upstream data quality is unpredictable, the test is configured with `severity = 'warn'`. Running `dbt test --select assert_header_matches_items` successfully intercepts `ord_007` without halting the entire pipeline:
 
