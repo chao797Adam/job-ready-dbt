@@ -368,7 +368,7 @@ with cte as (
         any_value(first_name) as first_name,
         any_value(email) as email,
         any_value(country) as country,
-        sum(total_amount) as rev,
+        sum(line_total_amount) as rev,
         count(order_id) as total_orders
     from dbt_job_ready.gold.fct_orders
     group by customer_id
