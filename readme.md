@@ -228,6 +228,98 @@ To validate that the Gold-layer fact models effectively answer core e-commerce q
 5. **Top Customers by Revenue** — joins `fct_orders` to `scd_customers` (`dbt_valid_to is null`, current customer attributes only) to rank customers by total revenue and order count.
 6. **Repeat Customers** — a `having count(order_id) > 1` filter on `fct_orders` grouped by `customer_id`, joined back to `scd_customers` for contact details.
 
+### Query Verifications (Tested in Databricks)
+
+#### 1. Top Products by Revenue & Units Sold
+```sql
+select
+    product_id, 
+    product_name,
+    sum(line_total) as revenue,
+    sum(quantity) as total_quantity
+from dbt_job_ready.gold.fct_order_items
+group by 1, 2
+order by revenue desc
+limit 10;
+```
+
+#### 2. Category-Level Revenue Breakdown
+```sql
+select
+    category,
+    sum(line_total) as total_revenue,
+    round(sum(line_total) / sum(sum(line_total)) over () * 100, 2) as revenue_pct
+from dbt_job_ready.gold.fct_order_items
+group by category
+order by total_revenue desc;
+```
+
+#### 3. Average Order Value per Month
+```sql
+select
+    date_trunc('month', order_date) as order_month,
+    count(order_id) as order_count,
+    sum(total_amount) as total_revenue,
+    round(sum(total_amount) / count(order_id), 2) as avg_order_value
+from dbt_job_ready.gold.fct_orders
+group by date_trunc('month', order_date)
+order by order_month;
+```
+
+#### 4. Revenue by Country
+```sql
+select
+    country,
+    sum(total_amount) as total_revenue,
+    count(order_id) as order_count
+from dbt_job_ready.gold.fct_orders
+group by country
+order by total_revenue desc;
+```
+
+#### 5. Top Customers by Revenue (Current Attributes)
+```sql
+with current_customers as (
+    select customer_id, first_name, last_name, email, country
+    from dbt_job_ready.silver.scd_customers
+    where dbt_valid_to is null
+)
+select
+    f.customer_id,
+    c.first_name,
+    c.last_name,
+    c.email,
+    c.country,
+    sum(f.total_amount) as total_revenue,
+    count(distinct f.order_id) as order_count
+from dbt_job_ready.gold.fct_orders f
+inner join current_customers c 
+    on f.customer_id = c.customer_id
+group by f.customer_id, c.first_name, c.last_name, c.email, c.country
+order by total_revenue desc
+limit 5;
+```
+
+#### 6. Repeat Customers
+```sql
+with repeat_customer_ids as (
+    select customer_id
+    from dbt_job_ready.gold.fct_orders
+    group by customer_id
+    having count(distinct order_id) > 1
+)
+select
+    r.customer_id,
+    c.first_name,
+    c.last_name,
+    c.email,
+    c.country
+from repeat_customer_ids r
+inner join dbt_job_ready.silver.scd_customers c
+    on r.customer_id = c.customer_id
+    and c.dbt_valid_to is null;
+```
+
 **BI Consumption Example:** the query behind analysis #2 (Category-Level Revenue Breakdown) was visualized as a Databricks Dashboard, confirming `fct_order_items` is directly queryable by downstream BI tools without further transformation.
 
 ![Revenue by Category Dashboard](job_ready_dbt/asset/dashboard-revenue%20per%20catelog.png)
