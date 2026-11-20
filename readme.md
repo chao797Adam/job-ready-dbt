@@ -274,6 +274,24 @@ group by date_trunc('month', order_date)
 order by order_month;
 ```
 
+**Business Impact — Revenue & AOV Discrepancy (June 2024)**
+
+The original tutorial calculates June 2024 revenue using the source order header amounts, producing **1,756.72** in revenue and an **AOV of 146.39** across 12 orders.
+
+My analysis instead uses `line_total_amount`, aggregated from order-item records, producing **1,836.76** in revenue and an **AOV of 153.06** for the same 12 orders.
+
+The **80.04 revenue difference (+4.56%)** is directly attributable to the `ord_007` discrepancy identified in the Data Quality Case Study. This demonstrates how a single inconsistent source record can materially affect downstream financial reporting, even when the SQL executes successfully.
+
+**Original Tutorial Result (Header-Based Revenue):**
+
+![Original Tutorial AOV](job_ready_dbt/asset/tutorial_monthly_aov.png)
+
+**My Result (Line-Item-Based Revenue):**
+
+![Reconciled Monthly AOV](job_ready_dbt/asset/reconciled_monthly_aov.png)
+
+**Key Takeaway:** A successful pipeline run does not guarantee accurate business metrics. Cross-grain reconciliation and a clearly defined revenue calculation method are essential for trustworthy analytics.
+
 #### 4. Revenue by Country
 ```sql
 select
