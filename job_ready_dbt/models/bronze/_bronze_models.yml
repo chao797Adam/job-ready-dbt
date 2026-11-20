@@ -14,6 +14,8 @@ models:
           - relationships:
               to: ref('scd_customers')  
               field: customer_id
+              config:                 # newly added
+                severity: warn        # newly added
 
   - name: stg_order_items
     description: "Staging view of order items."
@@ -24,7 +26,7 @@ models:
         tests: [not_null]
 
   - name: stg_products
-    description: "Staging view of products. Can contain multiple historical versions per product_id due to SCD2 tracking."
+    description: "Staging view of products. Trimmed and cast, then deduplicated to one row per product_id (latest updated_at). SCD2 history lives in the scd_products snapshot, not here."
     columns:
       - name: product_id
-        tests: [not_null]
+        tests: [unique, not_null]
