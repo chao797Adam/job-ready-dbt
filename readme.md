@@ -400,18 +400,16 @@ select * from cte
 - **Watermark Limitations:** see [Resolved issue](#-resolved-order_date-could-not-serve-as-a-change-detection-watermark) above — fixed by switching to an `updated_at` watermark.
 - **SCD2 Fan-Out Defense:** see [Resolved issue](#-resolved-scd2-product-dimension-caused-fan-out-in-line-item-fact-models) above — prevented by filtering `dbt_valid_to is null` in the fact/intermediate joins.
 - **Dedup Test Coverage:** see [Resolved issue](#-resolved-no-defensive-deduplication-before-merge-test-coverage-added) above — `unique`/`not_null` tests guard the gold-layer surrogate keys.
-- **Snapshot Source Uniqueness:** see [Resolved issue](#-resolved-snapshot-source-must-guarantee-uniqueness-no-direct-ref-on-seeds) below — SCD2 snapshots strictly require a source with guaranteed one-row-per-key.
+- **Snapshot Source Uniqueness:** see [Design note](#snapshots-read-from-staging-not-directly-from-the-seed) below — SCD2 snapshots strictly require a source with guaranteed one-row-per-key.
 
-### ✅ Resolved: Snapshot Source Must Guarantee Uniqueness (No Direct `ref` on Seeds)
+### Snapshots Read From Staging, Not Directly From the Seed
 
-**The problem (a common tutorial simplification):** The original reference tutorial points the `dbt snapshot` directly at the raw seed/source table and applies cleaning logic inside the snapshot query.
+**Design choice:** The reference tutorial points `dbt snapshot` directly at the raw seed table (`ref('raw_customers')`) and applies `trim`/`lower`/`upper` inside the snapshot query. That works in the video because the demo seed is cut down to a single row, so duplicates cannot occur. For this project I added a staging layer in between, because a snapshot cannot protect itself from a source that is not guaranteed to be clean or unique.
 
-**Why this is dangerous:**
-1. **No Uniqueness Guarantee:** Seed or raw source tables do not guarantee that the `unique_key` is actually unique. If the CSV contains duplicate `customer_id`s, dbt's `strategy='check'` will either silently generate spurious historical versions or fail.
-2. **Cleaning Must Happen Before the Comparison:** Without normalisation, whitespace or case drift (e.g., `" John"` vs `"John"`) would be recorded as a "business change" and create meaningless history rows. Here `stg_customers` trims and normalises first, and the snapshot reads that cleaned model. The tutorial also normalises, but inside the snapshot query, so the cleaned data is not reusable by other models.
-3. **Conflating Responsibilities:** Snapshotting should *only* track changes. Data cleansing and deduplication are separate concerns that belong to the staging layer.
-
-**Fix applied:** We enforce a strict boundary. Snapshots read *only* from cleaned staging models (e.g., `stg_customers`, `stg_products`), which act as a "cleansing gate" (casting, trimming, and deduplicating via `row_number()`).
+**What the staging layer protects against:**
+1. **No uniqueness guarantee:** A seed or raw table does not guarantee that the `unique_key` is actually unique. If the CSV contained duplicate `customer_id`s, dbt's `strategy='check'` could silently generate spurious historical versions or fail.
+2. **Cleaning must happen before the comparison:** Without normalisation, whitespace or case drift (e.g., `" John"` vs `"John"`) would be recorded as a "business change" and create meaningless history rows. `stg_customers` trims and normalises first, and the snapshot reads that cleaned model. The tutorial also normalises, but inside the snapshot query, so the cleaned data is not reusable by other models.
+3. **Separate responsibilities:** Snapshotting should only track changes. Cleansing and deduplication belong to the staging layer.
 
 **Verification:** We intentionally injected a duplicate `customer_id` and a row with extra whitespace into the raw seed. After running `dbt run` and `dbt snapshot`, the duplicate was filtered out and the whitespace difference was normalized, leaving the snapshot clean.
 
