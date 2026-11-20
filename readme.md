@@ -324,61 +324,56 @@ inner join dbt_job_ready.silver.scd_customers c
 
 ![Revenue by Category Dashboard](job_ready_dbt/asset/dashboard-revenue%20per%20catelog.png)
 
-### ⚡ Architectural Advantage: OBT (One Big Table) vs. Traditional Star Schema Join
+### Denormalized Customer Attributes vs. Joining the SCD2 Snapshot
 
-To validate the architectural decisions made in the Gold layer, I compared my ad-hoc query approach against the traditional tutorial approach for finding repeat customers.
+There are two ways to get customer details next to order counts. Both are correct as long as the SCD2 snapshot is filtered to the current row.
 
-**The Traditional Approach (Tutorial):**
-The tutorial's query requires a subquery aggregation on `fct_orders`, followed by a `LEFT JOIN` to the `scd_customers` dimension table to retrieve customer details (`first_name`, `last_name`). 
+**Option A: join `scd_customers` at query time.** The tutorial's `fct_orders` carries only `customer_id` and `customer_country`, so names have to come from a join with the snapshot. The tutorial's query does this, but without filtering on `dbt_valid_to IS NULL`:
 
 ```sql
--- Tutorial Approach: Requires Subquery + Join
+-- Tutorial query (no current-row filter)
 SELECT c.customer_id, c.first_name, c.last_name, o.no_of_orders
 FROM (
     SELECT customer_id, COUNT(order_id) as no_of_orders
     FROM workspace.gold.fct_orders
+    WHERE customer_id IS NOT NULL
+      AND order_id IS NOT NULL
     GROUP BY customer_id
     HAVING COUNT(order_id) > 1
 ) o
-JOIN workspace.gold.scd_customers c ON o.customer_id = c.customer_id;
+JOIN workspace.gold.scd_customers c
+    ON o.customer_id = c.customer_id;
 ```
 
-**My Approach (OBT Architecture):**
-Because I denormalized the active customer attributes into `fct_orders` during the Silver layer transformation (`dbt_valid_to IS NULL` filter), the Gold fact table acts as a wide, denormalized table (OBT-style). The query becomes a single-table aggregation with zero joins.
+A customer with two historical versions matches both, so the row comes back twice. Here `cust_001` (Alice Johnson) appears twice, each showing 4 orders, and a later sum would give 8:
+
+![Tutorial query: duplicated customer rows](job_ready_dbt/asset/tutorial_fanout_bug.png)
+
+The fix is one condition: `AND c.dbt_valid_to IS NULL`. My queries #5 and #6 above use it.
+
+**Option B: read the customer attributes already stored in `fct_orders`.** `int_orders_enriched` joins the current customer row (`dbt_valid_to is null`) once, so analysts can query a single table:
 
 ```sql
--- My Approach: Single-table scan, zero joins
-with repeat_customers as (
-    select 
+with cte as (
+    select
         customer_id,
-        ANY_VALUE(first_name) as first_name,
-        ANY_VALUE(last_name) as last_name,
-        COUNT(order_id) as total_orders
+        any_value(first_name) as first_name,
+        any_value(email) as email,
+        any_value(country) as country,
+        sum(total_amount) as rev,
+        count(order_id) as total_orders
     from dbt_job_ready.gold.fct_orders
     group by customer_id
-    having count(order_id) > 1
+    having total_orders > 1
 )
-select * from repeat_customers;
+select * from cte
 ```
 
-**Key Takeaway (The "Why"):**
-By moving the `LEFT JOIN` upstream into the Silver layer and materializing a wide fact table, downstream queries no longer need the join, and the SQL for analysts is simpler. This should reduce query work on large tables; I did not benchmark it on this small dataset.
+`cust_001` appears once, with the updated email and 4 orders:
 
-**Trade-off:** the customer attributes in `fct_orders` are copied at load time. `first_name`, `last_name` and `email` are not in `merge_update_columns`, and the watermark only watches `orders.updated_at`, so a later change to a customer shows up in existing order rows only after a `--full-refresh` (newly loaded orders pick up the current values).
+![Single-table query result](job_ready_dbt/asset/obt_single_table_result.png)
 
-**Proof of the SCD2 Fan-out Bug in the Tutorial:**
-*The screenshot below shows the actual execution result from the tutorial's own code. Notice the highlighted rows (red arrows): `cust_001` (Alice Johnson) is returned **twice**, each showing 4 orders.*
-
-![Tutorial Fan-out Bug](job_ready_dbt/asset/tutorial_fanout_bug.png)
-
-This is a classic **SCD2 fan-out**. Because the tutorial's query performed an unconditional `JOIN` to `scd_customers` without filtering for the active record (`dbt_valid_to IS NULL`), Alice's two historical versions duplicated her row in the final aggregation. In a real business scenario, this would cause Alice's order count to be artificially inflated to 8, leading to completely wrong business decisions.
-
-**My Architecture Avoids This Fan-out (Result Proof):**
-*The screenshot below shows the result of my single-table query against the OBT architecture.* 
-
-![OBT Single Table Result](job_ready_dbt/asset/obt_single_table_result.png)
-
-Because `fct_orders` already resolved the active SCD2 state at the Silver layer, my downstream aggregation query requires **zero joins**. Notice that `cust_001` (Alice) appears exactly **once**, with her updated email (`alice.updated@email.com`) and the mathematically accurate order count of **4**. No duplicates, no fan-out.
+**Trade-off.** Option B avoids a join for analysts, but the customer attributes are copied at load time. `first_name`, `last_name` and `email` are not in `merge_update_columns`, and the watermark only watches `orders.updated_at`, so a later customer change reaches existing order rows only after a `--full-refresh`. Option A always reads the current snapshot. Both rely on the same `dbt_valid_to is null` filter; Option B applies it once in Silver instead of in every query.
 
 ## 🛡️ Engineering Best Practices & Trade-offs
 
