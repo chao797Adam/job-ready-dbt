@@ -404,7 +404,7 @@ select * from cte
 
 ### ✅ Resolved: Snapshot Source Must Guarantee Uniqueness (No Direct `ref` on Seeds)
 
-**The problem (common tutorial anti-pattern):** The original reference tutorial points the `dbt snapshot` directly at the raw seed/source table and applies cleaning logic inside the snapshot query.
+**The problem (a common tutorial simplification):** The original reference tutorial points the `dbt snapshot` directly at the raw seed/source table and applies cleaning logic inside the snapshot query.
 
 **Why this is dangerous:**
 1. **No Uniqueness Guarantee:** Seed or raw source tables do not guarantee that the `unique_key` is actually unique. If the CSV contains duplicate `customer_id`s, dbt's `strategy='check'` will either silently generate spurious historical versions or fail.
