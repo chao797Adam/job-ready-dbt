@@ -303,6 +303,20 @@ group by country
 order by total_revenue desc;
 ```
 
+**Business Impact — Revenue by Country (US)**
+
+The original tutorial reports **1,892.48** in US revenue, while my line-item-based analysis reports **1,972.52**, a difference of **80.04 (+4.23%)**. Both queries return the same 11 US orders.
+
+This confirms that the `ord_007` discrepancy also affects country-level revenue reporting. By using `line_total_amount` instead of the inconsistent source header amount, the analysis applies the same revenue calculation method across all countries.
+
+**Original Tutorial Result (Header-Based Revenue):**
+
+![Original Tutorial Revenue by Country](job_ready_dbt/asset/tutorial_revenue_by_country.png)
+
+**My Result (Line-Item-Based Revenue):**
+
+![Reconciled Revenue by Country](job_ready_dbt/asset/reconciled_revenue_by_country.png)
+
 #### 5. Top Customers by Revenue (Current Attributes)
 ```sql
 with current_customers as (
@@ -325,6 +339,22 @@ group by f.customer_id, c.first_name, c.last_name, c.email, c.country
 order by total_revenue desc
 limit 5;
 ```
+
+**Business Impact — Top Customers by Revenue**
+
+The original tutorial reports **490.75** in revenue for `cust_005`, while my line-item-based analysis reports **570.79**, a difference of **80.04 (+16.31%)**.
+
+This discrepancy originates from order `ord_007`, which belongs to `cust_005`. Although the customer still has 2 orders, the revenue attributed to that customer is understated when using the original header amount.
+
+The comparison demonstrates how a single upstream data inconsistency can propagate into customer-level revenue reporting and potentially affect customer segmentation and ranking.
+
+**Original Tutorial Result (Header-Based Revenue):**
+
+![Original Tutorial Top Customers](job_ready_dbt/asset/tutorial_Top_customer_by_Revenue.png)
+
+**My Result (Line-Item-Based Revenue):**
+
+![Reconciled Top Customers](job_ready_dbt/asset/reconciled_Top_Customers_by_Revenue.png)
 
 #### 6. Repeat Customers
 ```sql
